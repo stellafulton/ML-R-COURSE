@@ -47,7 +47,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 # Preparations
 
-Load the necessary libraries
+Install and load the necessary libraries
 
 ```{r libraries, results='markdown', eval=TRUE, message=FALSE, warning=FALSE}
 library(tidyverse) #for data wrangling
@@ -75,54 +75,275 @@ Important data manipulation functions:
 
 # Piping
 
+Use %>% to pipe the output of one function to another function & so on & so forth
+You can use pipe with anything so long as the first argument of the function you're piping to calls for a data frame
+
+
 # Data files
 
 ```{r getData, results='markdown', eval=TRUE}
-load(file='../data/manipulationDatasets.RData')
-data.1 %>% head
+load(file='../data/manipulationDatasets.RData') # .. means go back a directory and then go into data; RData takes up less space than a csv for example
+data.1 %>% head %>% summary # taking the table data.1 and applying the head function to it to show only the start of the table (first 6 rows) 
+str(data.1) # str is a string representation of the object - tells you what sort of data is in each variable
+glimpse(data.1) # glimpse tells you the class of each variable
 ```
 
 Sorting data
+Most useful in presenting data, less important with analysis
 ================
+```{r sorting}
+arrange(data.1, LAT)      # arrange takes the data.frame, then the variable you want to sort by -                                this example sorts data.1 by LAT (latitude)
+
+# now we can do the same thing using the pipe!
+data.1 %>%                # take the datafram 'data.1'
+  arrange(LAT)            # use pipe to sort by Latitude
+
+# to sort in descending order....
+data.1 %>%
+  arrange(-LAT)
+
+# sort on two variables...(use , or &)
+data.1 %>%                 # take the dataframe 'data.1'
+  arrange(Cond, Temp)      # sort by Cond, then sort by Temp (you can also use & i.e. arrange(Cond & Temp))
+
+# you could sort by whatever you want e.g. the sum of two variables:
+data.1 %>%
+  arrange(LAT+LONG)
+
+# sort by Between and then Cond
+data.1 %>%
+  arrange(Between,Cond)
+
+# sort by Cond & then the ratio of Temp to LAT
+data.1 %>%
+  arrange(Cond,Temp/LAT)
+```
 
 
 Manipulating factors
 =======================
+```{r manipulating factors}
+# R sorts factors in alphabetical order - you can re-level & re-label though - this is useful when graphing
+
+data.3 <- data.1      # create a copy of data.1 & call it something else
+#data.3 <- levels(data.3$Cond)
+
+data.3$Cond <- factor(data.3$Cond, levels=c('L','M','H'), labels=c("Low", "Medium","High")) # provide labels for your factors 
+```
 
 
 Subset columns
+SELECTING COLUMNS
 =================
 
 ## Regular expressions (regex)
 
 https://github.com/rstudio/cheatsheets/raw/master/data-transformation.pdf
 
+```{r selecting_columns}
+select(data.1, Between, Plot, Cond, Time, Temp) # select only the variables you want to view from the whole data frame
+
+# sometimes select can have trouble because it refers to functions from different packages so good practise to use it this way:
+
+dplyr::select(data.1, Between, Plot, Cond, Time, Temp) # i.e. tell R what package the function 'select' is coming from
+
+# type in the function name i.e. 'select' into the console and R will tell you the namespace i.e. the package the function has come from
+
+# can select everything BUT certain variables BUT you can't combine the two i.e. you can't do select(data.1, BETWEEN, -LAT)
+data.1 %>% select(-LAT,-LONG) # select everything except LAT & LONG
+```
+
+```{r helper_functions}
+# Helper functions - string matching is NOT case sensitive
+
+# contains()
+# ends_with()
+# starts_with()
+# matches()
+
+select(data.1,contains('L')) # select the variables that contain an L
+select(data.1, starts_with('L')) # select the variables that START with L
+select(data.1, ends_with('L')) # select the variables that END with L
+# regX searching - regular expression searching
+#select(data.1, match('^T[a-z]m.'))  # 4 letters long, ^ must start with T, [] any of those letters, must have an m, . is any letter' 
+
+select(data.1,Between:Temp) # select every column from Between to Temp (only useful if you know the order)
+
+# R has lots of data sets already available
+head(nasa) # e.g. the nasa dataset 
+nasa %>% select(lat, long, starts_with("cloud")) %>% head()
+
+# select allows you to change columns because they appear in the order you type them
+select(data.1, Time, everything()) # put Time in the front, and then leave everything else where it is
+
+tikus[1:10,c(1:3,76:77)] # just another dataset in R
+# select rep, time & only the species that DON'T contain pora
+tikus %>%
+  select(rep,time,everything(),-contains('pora'))
+
+dplyr::select(tikus,`Pocillopora damicornis`) # if variable name has a space in it, refer to is using back ticks ` (the key on top left of keyboard with the squiggle character)
+
+# what if you just want the vector that corresponds to the variable you want (rather than the data frame) - use 'pull'
+data.1 %>% 
+  pull(Temp) # spits out a vector with just the variable Temp
+
+# rename allows you to change the names of variables 
+data.1 %>% 
+  rename(Condition=Cond, Temperature=Temp)
+```
+
 
 Filtering
+SELECTING ROWS
 =============
+```{r filtering rows}
+data.1 %>% 
+  filter(Cond=="H") # only show me the rows where Cond equals H
+
+data.1 %>% 
+  filter(Cond %in% c('H','M')) %>%     # %in% operator means OR i.e. is Cond in the set of c('H','M') so is Cond H or M
+  arrange(Cond)                        # now sort by Cond
+
+data.1 %>% 
+  filter(Cond=='H'|Cond=='M')          # this does the same thing, but can get a bit clunky & long-winded if you have lots of conditions to filter by
+
+# filtering using different logical statements
+
+data.1 %>% 
+  filter(Cond=='H'& Temp < 25) # filter for Cond equals H AND temp is less than 25
+
+data.1 %>% 
+  filter(Cond=='H'|Temp < 25) # filter for Cond equals H OR temp is less than 25
+
+# let's  keep only the rows with Temp less than 20 and LAT greater than 20 or LONG less than 145
+
+data.1 %>% 
+  filter((Temp < 20) & (LAT > 20 | LONG < 145))
+
+# can also filter based on position
+slice(data.1,1:4) # just keep first 4 rows
+slice(data.1,c(1:4,7)) # just keep first 4 rows & the 7th row 
+# can be useful to pipe together arrange then slice
+
+sample_n(data.1,10,replace=TRUE) # will give you 10 rows from your data frame at random
+
+# examine the levels of the Cond factor
+data.3 <- filter(data.1,Plot=='P1')
+data.processed <- data.1 %>% 
+  filter(Plot=="P1") %>% 
+  droplevels # this makes sure the levels that you don't want i.e. P2, P3, P4 are dropped from the dataframe - should be routine that you droplevels when filtering
+
+```
+
 
 Adding columns - mutate
 ===========================
+```{r adding columns}
+
+# create a new variable from existing ones & add into dataframe
+
+data.1 %>% 
+  mutate(LL=LAT+LONG)   # add a new column to the data.1 dataframe that is the sum of LAT & LONG
+
+data.1 %>% 
+  mutate(logTemp=log(Temp))
+
+data.1 %>% 
+  mutate(MeanTemp=mean(Temp),cTemp=Temp-MeanTemp) # centre the data around the mean (i.e. standardise it - probably need to do this if assuming normal distribution)
+
+data.1 %>%  
+  mutate(cTemp=Temp-mean(Temp))  # this code odes the sample thing but won't keep mean(Temp) as an extra column
+
+data.1 %>%  
+  mutate(leadTemp=lead(Temp), lagTemp=lag(Temp)) # useful for temporal data
+
+```
 
 
 Summarising (aggregating) data
+When you summarise you end up with 1 row
 =================================
+```{r summarise}
+data.1 %>%  mutate(mean(Temp)) %>% nrow() # 12 rows
+
+data.1 %>% summarise(mean(Temp)) # summarize also works - s or z it doesn't matter # 1 row
+
+data.1 %>% summarise(Mean=mean(Temp),Variance=var(Temp)) # summarise by mean & variance - can summarise by anything you want
+
+#across versions of summarise:
+
+data.1 %>% 
+  summarise(across(c(Temp,LAT),list(Mean=mean,Var=var))) # calculate the mean and variance across the variables Temp and LAT 
+
+data.1 %>% 
+  summarise(across(where(is.numeric),list(Mean=mean, Var=var))) # calculate the mean & variance across all numeric variables
+
+data.1 %>% 
+  summarise(across(where(is.numeric),mean),across(where(is.factor),length)) # calculate the mean for all the numeric variables & the length of all the factor variables
+
+```
 
 Piping
+Take the output of one function and pipe it into the next function (instead of doing functions inside functions)
 =======
+```{r}
+## %>%                     # 'shift control m' is the shortcut for the pipe function
+```
+
 
 Grouping (=aggregating)
+Takes categorical variables & splits data according to those variables
 =========================
+```{r grouping}
+
+data.1 %>%                     # 'shift control m' is the shortcut for the pipe function
+  group_by(Between,Plot) %>%   # group the data by the variables Between & Plot 
+  summarise(Mean=mean(Temp))   # then calculate the Mean temp for each of those groups
+
+data.1 %>%                     
+  group_by(Plot) %>% arrange(Temp)  
+```
+
 
 Reshaping data
 =================
 
+Wide format - different observations are in different rows - the format data is often collected & stored in
+Long format - every observation is in its own row (this is assumed) - the format data is analysed in
+
+going from wide to long format - used to be called 'melting' - now called 'gathering'
 ## Gathering
+```{r gathering}
+### don't worry about this section too much.....
+#gather(Time,Count, Time.0:Time.2)
+#OR
+#gather(Time, Count, -Between, -Plot)
+
+# gather(what is repeated)
+```
 
 ## Spread
+```{r spreading}
+#the reverse of gather is a 'spread' 
+#select(-Resp2) %>% spread(Within,Resp1)
+```
 
 Combining data
 =================
+```{r merging}
+# merging data frames
+head(data.bio) # missing S3
+head(data.chem) # missing S7
+inner_join(data.bio, data.chem) # innerjoin only keep rows that are matched by both - so since S3 & S7 don't have matches, they do not appear in the merged data frame
+
+full_join(data.bio,data.chem) # keeps everything even if things don't match
+
+left_join(data.bio,data.chem) # keeps things that match with the stuff on the left - so there's no S3 here
+right_join(data.bio, data.chem) # keeps things that match with the stuff on the right - so there's no S7 here
+
+left_join(data.bio,data.geo,by=c("Plot")) # the 'by' bit tells which variables to match on
+```
+
 
 Applied examples
 ===================
