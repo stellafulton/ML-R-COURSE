@@ -46,6 +46,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 # Preparations
+Murray's presentation notes: Pres 2.4 in docs folder
 
 Install and load the necessary libraries
 
@@ -74,23 +75,25 @@ Important data manipulation functions:
 |                           |                             |           |
 
 # Piping
+Use %>% to pipe the output of one function to another function & so on & so forth (instead of doing functions inside functions)
 
-Use %>% to pipe the output of one function to another function & so on & so forth
 You can use pipe with anything so long as the first argument of the function you're piping to calls for a data frame
 
+'shift control m' is the shortcut for the pipe function
 
 # Data files
-
 ```{r getData, results='markdown', eval=TRUE}
 load(file='../data/manipulationDatasets.RData') # .. means go back a directory and then go into data; RData takes up less space than a csv for example
+
 data.1 %>% head %>% summary # taking the table data.1 and applying the head function to it to show only the start of the table (first 6 rows) 
+
 str(data.1) # str is a string representation of the object - tells you what sort of data is in each variable
+
 glimpse(data.1) # glimpse tells you the class of each variable
 ```
-
 Sorting data
-Most useful in presenting data, less important with analysis
 ================
+Most useful in presenting data, less important with analysis
 ```{r sorting}
 arrange(data.1, LAT)      # arrange takes the data.frame, then the variable you want to sort by -                                this example sorts data.1 by LAT (latitude)
 
@@ -118,8 +121,6 @@ data.1 %>%
 data.1 %>%
   arrange(Cond,Temp/LAT)
 ```
-
-
 Manipulating factors
 =======================
 ```{r manipulating factors}
@@ -130,16 +131,11 @@ data.3 <- data.1      # create a copy of data.1 & call it something else
 
 data.3$Cond <- factor(data.3$Cond, levels=c('L','M','H'), labels=c("Low", "Medium","High")) # provide labels for your factors 
 ```
-
-
 Subset columns
+=======================
 SELECTING COLUMNS
-=================
-
 ## Regular expressions (regex)
-
 https://github.com/rstudio/cheatsheets/raw/master/data-transformation.pdf
-
 ```{r selecting_columns}
 select(data.1, Between, Plot, Cond, Time, Temp) # select only the variables you want to view from the whole data frame
 
@@ -152,7 +148,7 @@ dplyr::select(data.1, Between, Plot, Cond, Time, Temp) # i.e. tell R what packag
 # can select everything BUT certain variables BUT you can't combine the two i.e. you can't do select(data.1, BETWEEN, -LAT)
 data.1 %>% select(-LAT,-LONG) # select everything except LAT & LONG
 ```
-
+HELPER FUNCTIONS
 ```{r helper_functions}
 # Helper functions - string matching is NOT case sensitive
 
@@ -162,15 +158,19 @@ data.1 %>% select(-LAT,-LONG) # select everything except LAT & LONG
 # matches()
 
 select(data.1,contains('L')) # select the variables that contain an L
+
 select(data.1, starts_with('L')) # select the variables that START with L
+
 select(data.1, ends_with('L')) # select the variables that END with L
+
 # regX searching - regular expression searching
-#select(data.1, match('^T[a-z]m.'))  # 4 letters long, ^ must start with T, [] any of those letters, must have an m, . is any letter' 
+# select(data.1, match('^T[a-z]m.'))  # 4 letters long, ^ must start with T, [] any of those letters, must have an m, . is any letter' 
 
 select(data.1,Between:Temp) # select every column from Between to Temp (only useful if you know the order)
 
 # R has lots of data sets already available
 head(nasa) # e.g. the nasa dataset 
+
 nasa %>% select(lat, long, starts_with("cloud")) %>% head()
 
 # select allows you to change columns because they appear in the order you type them
@@ -191,11 +191,9 @@ data.1 %>%
 data.1 %>% 
   rename(Condition=Cond, Temperature=Temp)
 ```
-
-
 Filtering
-SELECTING ROWS
 =============
+SELECTING ROWS
 ```{r filtering rows}
 data.1 %>% 
   filter(Cond=="H") # only show me the rows where Cond equals H
@@ -232,14 +230,10 @@ data.3 <- filter(data.1,Plot=='P1')
 data.processed <- data.1 %>% 
   filter(Plot=="P1") %>% 
   droplevels # this makes sure the levels that you don't want i.e. P2, P3, P4 are dropped from the dataframe - should be routine that you droplevels when filtering
-
 ```
-
-
 Adding columns - mutate
 ===========================
 ```{r adding columns}
-
 # create a new variable from existing ones & add into dataframe
 
 data.1 %>% 
@@ -256,13 +250,10 @@ data.1 %>%
 
 data.1 %>%  
   mutate(leadTemp=lead(Temp), lagTemp=lag(Temp)) # useful for temporal data
-
 ```
-
-
 Summarising (aggregating) data
-When you summarise you end up with 1 row
 =================================
+When you summarise you end up with 1 row
 ```{r summarise}
 data.1 %>%  mutate(mean(Temp)) %>% nrow() # 12 rows
 
@@ -280,22 +271,11 @@ data.1 %>%
 
 data.1 %>% 
   summarise(across(where(is.numeric),mean),across(where(is.factor),length)) # calculate the mean for all the numeric variables & the length of all the factor variables
-
 ```
-
-Piping
-Take the output of one function and pipe it into the next function (instead of doing functions inside functions)
-=======
-```{r}
-## %>%                     # 'shift control m' is the shortcut for the pipe function
-```
-
-
 Grouping (=aggregating)
-Takes categorical variables & splits data according to those variables
 =========================
+Takes categorical variables & splits data according to those variables
 ```{r grouping}
-
 data.1 %>%                     # 'shift control m' is the shortcut for the pipe function
   group_by(Between,Plot) %>%   # group the data by the variables Between & Plot 
   summarise(Mean=mean(Temp))   # then calculate the Mean temp for each of those groups
@@ -303,15 +283,11 @@ data.1 %>%                     # 'shift control m' is the shortcut for the pipe 
 data.1 %>%                     
   group_by(Plot) %>% arrange(Temp)  
 ```
-
-
 Reshaping data
 =================
-
 Wide format - different observations are in different rows - the format data is often collected & stored in
 Long format - every observation is in its own row (this is assumed) - the format data is analysed in
-
-going from wide to long format - used to be called 'melting' - now called 'gathering'
+NB: going from wide to long format used to be called 'melting' - now called 'gathering'
 ## Gathering
 ```{r gathering}
 ### don't worry about this section too much.....
@@ -321,13 +297,11 @@ going from wide to long format - used to be called 'melting' - now called 'gathe
 
 # gather(what is repeated)
 ```
-
 ## Spread
 ```{r spreading}
 #the reverse of gather is a 'spread' 
 #select(-Resp2) %>% spread(Within,Resp1)
 ```
-
 Combining data
 =================
 ```{r merging}
@@ -343,7 +317,104 @@ right_join(data.bio, data.chem) # keeps things that match with the stuff on the 
 
 left_join(data.bio,data.geo,by=c("Plot")) # the 'by' bit tells which variables to match on
 ```
-
-
-Applied examples
+Applied example
 ===================
+Reading in data
+===================
+```{r}
+temporal_data <- read.csv(file="/Users/sfulton/OneDrive - James Cook University/JCU/R/AIMSJCU ML R COURSE/ML R COURSE/data/temporal.data.csv",strip.white=TRUE)        
+
+# to read in csv files - file name need to be a string i.e. in ""
+# 'strip.white' strips off white space characters from any numbers & words i.e. gets rid of spaces - this is good practice to do 
+```
+Quick look at data
+===================
+```{r}
+# now let's have a quick look at the data
+
+head(temporal_data) # view the first 6 rows of the dataset
+# NB: R sees the time variable as a string - we need to declare that it is time - see next chunk
+
+str(temporal_data)  # view the class of the variables
+
+glimpse(temporal_data)
+```
+Modifying time variables
+========================
+```{r}
+# declare a time variable as a date time object - use package lubridate
+library(lubridate)
+
+temporal_data %>% 
+  mutate(Time=ymd_hms(Time)) %>% 
+  head() 
+
+# date doesn't have to be in ymd & can have backslash or other punctuation to separate year month date
+```
+Dealing with date & time
+========================
+# How R stores date & time
+```{r}
+date1 <- '2020-02-29'    # at the moment date1 & date2 are strings
+date2 <- '2020-05-03'
+
+# we want to turn them into date time objects
+as.numeric(ymd(date1)) # ymd turns it into time date object which is stored as an integer - as.numeric converts that time date object to the numerical object (integer)
+# the integer represents the number of days that have elapsed since Jan 1 1970
+```
+# How to work out difference between dates & time
+```{r}
+(Diff1=ymd(date2)-ymd(date1)) # putting brackets around the whole thing prints the stored object out to screen
+
+# if time is involved it will tell you difference in seconds
+
+date3 <- '2020-04-07 11:19:20'
+date4 <- '2020-04-07 11:19:37'
+ymd_hms(date3)
+ymd_hms(date3) %>% as.numeric()
+ymd_hms(date4) %>% as.numeric()
+(Diff2=ymd_hms(date4)-ymd_hms(date3)) # difference is given in seconds
+```
+# Periods of time - relative to what month it is
+```{r}
+period(1, 'month') # this means a period of 1 month
+ymd(date1) + period(1,'month') # adds 1 month to the date stored as date1 (the length of 1 month will vary depending on what month it is)
+```
+# Durations of time - constant 
+```{r}
+duration(1,'month') # this does not vary depending on the month - this gives the average duration of a month
+ymd(date1) + duration(1,'month') # this adds on a constant amount rather than an amount tht depends on the starting point
+```
+# Converting between months and weeks and days
+```{r}
+Diff1/dweeks(1) # tells you the difference in time (which is in months) in weeks
+Diff1/dhours(1) # tells you the difference in time (which is in months) in hours
+```
+Back to the temporal dataset
+============================
+Question: what if we want to know the average resp per hour??
+# Set up the dataset first
+```{r}
+head(temporal_data) # quick look to remind us what we're dealing with
+
+# first we need to know the difference between each time point & we need to create a new variable
+
+temporal_sum <- temporal_data %>% 
+  mutate(Time=ymd_hms(Time)) %>%                 # convert time using the ymd_hms function
+  group_by(Site) %>%                             # we want to average resp separately for each site
+  mutate(Hours=(Time-min(Time))/dhours(1),Hours=ceiling(Hours+0.001)) # create a new variable Hours that is the difference between each time point and the minimum time point, and express it as the number of hours # then we want to turn it into an integer that represents the 'hour' group each time point is in i.e. hour 1, 2, 3 so we round to the ceiling
+  
+head(temporal_sum) # let's just have a quick look at this # now we have a variable Hours that we can aggregate with
+```
+# Aggregate by Site & Hours to answer the question
+```{r}
+temporal_sum <- temporal_data %>% 
+  mutate(Time=ymd_hms(Time)) %>%                 
+  group_by(Site) %>%                             
+  mutate(Hours=(Time-min(Time))/dhours(1),Hours=ceiling(Hours+0.001)) %>% 
+  group_by(Site, Hours) %>%                      # now group by Site & Hours
+  summarise(Mean=mean(Resp)) %>%                 # calculate the mean for the groups we have just selected
+  ungroup                                        # now ungroup so you don't perform further analyses on grouped data - this is important!
+
+temporal_sum  # let's view this: it's a tibble FYI
+```

@@ -46,7 +46,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 # Preparations
-
+Murray's tutorial presentation notes pres 7.1
 Load the necessary libraries
 
 ```{r libraries, results='markdown', eval=TRUE, warning=TRUE, message=FALSE}
@@ -87,30 +87,175 @@ The aim of the analysis is to investigate the relationship between fertilizer co
 # Read in the data
 
 ```{r readData, results='markdown', eval=TRUE}
-fert = read_csv('../data/fertilizer.csv', trim_ws=TRUE)
+fert = read_csv('../data/fertilizer.csv', trim_ws=TRUE) # trim_ws is the same as strip.white when you use read.csv
 glimpse(fert)
 head(fert)
 str(fert)
 ```
 
-# Exploratory data analysis
+# Exploratory data analysis - get a sense for what the data is saying & how likely assumptions are to be met etc. 
 
-Model formula:
+Model formula: we're going to assume normality and see how that goes
 $$
 y_i \sim{} \mathcal{N}(\mu_i, \sigma^2)\\
 \mu_i = \beta_0 + \beta_1 x_i
 $$
+Let's make a scatter plot of yield vs. fertilizer to see what the data looks like
+```{r scatter plot}
+# is it approximately linear and the mean & variance relatively constant?
+ggplot(fert,aes(x=FERTILIZER,y=YIELD))+
+  geom_point()+
+  geom_smooth(method='lm')+ # apply a linear model 
+  theme_classic() # this looks pretty linear & looks like the variance is pretty even
+```
+```{r box plot}
+# is the data approximealty normally dsitributed??
+ggplot(fert,aes(y=YIELD))+
+  geom_boxplot() # yep this looks relatively normally distributed
+```
 
+```{r violin plot}
+# violin plot is good to show density
+ggplot(fert,aes(y=YIELD,x=1))+
+  geom_violin()
+```
 
 # Fit the model
+```{r fit the model}
+fert.lm <- lm(YIELD~1+FERTILIZER,data=fert) # manually specify intercept
+fert.lm <- lm(YIELD~FERTILIZER,data=fert) # but R will automatically put an intercept in for us so we don't need the '1+' bit
+
+attributes(fert.lm) # this tells you what is inside the list (fert.lm is a list object)
+print(fert.lm$coefficients) # print to screen specific attributes of fert.lm
+
+# Helper functions
+coef(fert.lm) # this does the same thing as fert.lm$coefficients - different satistical routines might store the coefficients in different ways so using the coef() function searches for the coefficients regardless of how they're stored - can be more useful
+summary(fert.lm) 
+```
 
 # Model validation
+```{r run autoplot to suss out what's going on}
+# test assumptions of the model
+
+autoplot(fert.lm,which=1:6,ncol=2,label.size=3) # gives you a set of standarad diagnostic plots
+
+# residuals vs. fitted - 
+
+# standardises the residuals - useful for other models
+
+# Cook's distance - influence of outliers - 
+# leverage - how much of a outlier along the x axis
+# residual: - how much of an outlier along the y axis
+# Cook's distance - a measure of a point's overall influence based on residual & leverage - anything more than 0.8 is considered overly influential (the scale is standardised) - Cook's distance is a combination of residuals & leverage - if you have an issue with Cook's distance - look at residual vs. leverage plot to see whether the outlier is more along the x axis or the y axis - if Cook's distance if fine then the Residual's vs. leverage and Cook's Distance vs. leverage plots aren't going to tell you much more 
+
+# if you need to see the specific Coook's distnace values then:
+influence.measures(fert.lm) # cook's distance = cook.d, leverage = hat, inf - puts a star next to most extreme values
+```
+
+```{r}
+plot_grid(plot_model(fert.lm, type='diag'))
+# first plot is Q-Q normal plot
+# bottom plot is residual plot
+# right hand plot shows a dsitribution of your data
+```
+```{r base graphics effects plot}
+# plotting the trends that the model has estimated - effects plot aka partial plot
+plot(allEffects(fert.lm,residuals=TRUE)) # needs to know what model to plot, residuals part is how to put the points on the graph, blue line represents line of best fit, pink line is a smoother through the observed data
+
+# here we have a positive slope, roughly what the intercept is, & the range of predicted values is sensible - get a sense that the model is a reasonably good model
+
+# this is using base graphics - we can also use ggplot to do this
+```
+```{r ggplot effects plot}
+# use ggplot to create effects plot - plot_model can make lots of different types of plots - see help for more info
+plot_model(fert.lm,type='eff', show.data=TRUE)
+```
+ 
 
 # Model investigation / hypothesis testing
+```{r}
+# summary
+# want to estimate effect  size, want to estimate the response in yield relative to fertiliser input - this is the slope: 0.81139
+# standard error: 0.08367
+# the way you interpret a p value is it's either less than 0.05 or it's not! that's it! interpret as a binomial thing - magnitude of p value is a reflection of sample size and not much else - not a reflection of effect size 
+# R squared value - measure of the strength of the relationships between the two variables
+summary(fert.lm)
 
+# note on centering data: if we had centred our data, the slope wouldn't change - the y intercept would change - the y intercept becomes the mean if we centre our data - this is just one reason to centre the data - centering data can make the maths a lot easier - same with scaling the data 
+```
+```{r confidence intervals for significance}
+# the alternative to using the p-value (since these are misused a lot) are confidence intervals
+confint(fert.lm) # this gives you 95% confidence intervals
+# can talk about significance using confidence intervale - if the interval includes zero, then not significant - if interval doesn't include zero then it is significant - confidence intervals gives you an indication of the variability of the effect size - more useful than p value
+```
+
+```{r tidy}
+# tidy give you as consistent an output from any model as it can - because statistical models can vary in their outputs
+tidy(fert.lm, conf.int = TRUE) # useful for putting in tables etc. 
+
+fert.lm %>% 
+  tidy(conf.int = TRUE) %>% 
+  kable() # this is helpful for formatting - outputs it as a table
+```
 
 # Predictions
+how to make predictions in R ( i.e. substituting lots and lots of possible values into our model)
+```{r making predictions}
+# we could do this all by hand byt first creating a model matrix
+newdata <- data.frame(FERTILIZER=110)
+Xmat <- model.matrix(~FERTILIZER,data=newdata)
+# now just need to do the inner product between new data & coefficients
+coef(fert.lm)%*%t(Xmat) #need to transpose Xmat so matrix mulitplication works
+# this give us our predicted value
+
+# what about some more predictions?
+newdata2 <- data.frame(FERTILIZER=110:120)
+Xmat2 <- model.matrix(~FERTILIZER,data=newdata2)
+coef(fert.lm)%*%t(Xmat2)
+
+# R has a function that does all this for us:
+emmeans(fert.lm,~FERTILIZER,at=newdata2) # what variable do you want to do the predictions for? - FERTILIZER, what data are 
+# this gives you predicted values, standard error, and confidence intervals
+```
 # Summary figures
+```{r}
+# now let's choose a bigger range of values, capture the results & turn it into a graph!
+
+fert_grid <- fert %>%  data_grid(FERTILIZER=seq_range(FERTILIZER, n=100)) # create a sequence of numbers over a range of values - we want 100 values in our sequence 
+
+# now create predictions from the sequence of numbers we created above using out linear model
+newdata <- emmeans(fert.lm,~FERTILIZER,at=fert_grid) %>% 
+  as.data.frame   # this bit at the end tells it to turn the tibble it created into a data frame
+
+# plot just the line of best fit & the raw data
+
+ggplot()+
+  geom_point(data=fert,aes(y=YIELD,x=FERTILIZER))+
+  geom_line(data=newdata,aes(y=emmean,x=FERTILIZER))+
+  geom_ribbon(data=newdata,aes(ymin=lower.CL,ymax=upper.CL,x=FERTILIZER),alpha=0.3) # alpha makes the ribbon more or less transparent
+
+ggplot(data=newdata,aes(x=FERTILIZER))+
+  geom_point(data=fert,aes(y=YIELD,x=FERTILIZER))+
+  geom_line(aes(y=emmean))+
+  geom_ribbon(aes(ymin=lower.CL,ymax=upper.CL,x=FERTILIZER),alpha=0.3)+
+  theme_classic()+
+  scale_y_continuous(expression(Grass~yield~(g/m^-3)))+
+  scale_x_continuous(expression(Fertilizer~concentration~(g/ml^-1)))
+```
 
 # References
- 
+The example Rmd files have code showing how to do different things with graphs
+e.g. fig.cap() gives you a figure caption but there's some tricks involved so look through the R markdown Example4.Rmd (saved under resources > Rmarkdown-examples)
+same applies to tables
+
+# Citations
+Should definitely cite the R packages that you use in your analysis 
+type in citation() to get the correct citation for the R package you're using - specify what version of R
+e.g. citation(package='lme4')
+only cite the packages you use for the actual analysis - don't worry about the packages you use for graphing etc. for example
+
+# RE making R markdowns put sessionInfo() in the last chunk - this tells you what packages you used, what version you were using etc. etc. - good habit to get into 
+```{r session information}
+sessionInfo()
+```
+

@@ -46,32 +46,69 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 # Preparations
-
+Murray's tutorial notes pres 5.2 in docs folder
 Load the necessary libraries
-
 ```{r libraries, results='markdown', eval=TRUE, message=FALSE, warning=FALSE}
-library(tidyverse) #for data wrangling
+# some useful packages for graphing
+library(tidyverse) # for data wrangling
 library(grid)
-library(scales)
+library(scales) # colour, size, axes etc. 
 library(gridExtra)
 ```
 
-Graphics infrastructure
+Graphics infrastructure - essential elements of a graph
 ========================
 
-- **layers** of data driven objects
-- **coord**inate system
-- **scales**
-- **faceting**
-- **themes**
+- **layers** of data driven objects - at least 1 layer of data 
+- **coordinate** system 
+- **scales** - scale, legend, caption
+- **faceting** - multiple graphs - should look alike
+- **themes** - overall scheme of the graph - colour, size, font etc. etc. - aesthetics
 
 
 Motivating data
 -----------------
-
 ```{r, results='markup'}
 head(BOD)
 summary(BOD)
+```
+
+making graphs the old way
+-------------------------
+```{r}
+# this is the long-hand version of making plots with ggplot but we never do it like this!!!! too long & messy
+p <- ggplot() + # single layer - points
+  layer(data=BOD, # data.frame
+    mapping=aes(y=demand,x=Time),
+    stat="identity", # use original data - identity means multiple the data point by 1 i.e. don't do anything to the raw data - plot as is
+    geom="point", # plot data as points - geom says what geometric layer you want the data to display as
+    position="identity", # where to place the points on the graph
+    params = list(na.rm = TRUE),
+    show.legend = FALSE # should there be a legend associated with this layer? e.g. axes scale, key etc.
+  )+ # layer of lines - let's put another layer on our graph - a line!
+  layer( data=BOD, #data.frame
+    mapping=aes(y=demand,x=Time), # specific coordinates
+    stat="identity", # use original data
+    geom="line", # plot data as a line
+    position="identity",
+    params = list(na.rm = TRUE),
+    show.legend = FALSE
+  ) +
+  coord_cartesian() + #cartesian coordinates
+  scale_x_continuous() + #continuous x axis
+  scale_y_continuous()  #continuous y axis
+```
+making graphs the new way
+-------------------------
+```{r}
+# short-hand version - much easier
+ggplot(data=BOD, map=aes(y=demand,x=Time)) +  # aes means aesthetics
+  geom_point()+
+  geom_line()
+# since the first argument in the ggplot function required is the data frame we can pipe our data to ggplot:
+BOD %>% ggplot(map=aes(y=demand,x=Time))+
+                 geom_point()+ # refer to layer by its geometric feature i.e. point
+                 geom_line() # these additional layers inherit all the information from the ggplot function - but you can state separately
 ```
 
 Layers
@@ -83,37 +120,106 @@ Layers
     - **mapping** of aesthetics
     - **position** control
 
-## geom_point
-
 Primary geometric objects
 ===========================
 
 `geom_bar`
 ------------
+# Single continuous variable - HISTOGRAM
+```{r}
+head(diamonds) # example data
+ggplot(diamonds) + geom_bar(aes(x = carat)) # when you do geom_bar and you give it a continuous variable you get a histogram - needs to bin the data which you can specify if you want but generally don't
+```
+# Single categorical variable - BAR CHART
+```{r}
+ggplot(diamonds) + geom_bar(aes(x = cut))
+```
+# Multiple categorical variables - STACKED BAR CHART IS DEFAULT
+```{r}
+ggplot(diamonds) + geom_bar(aes(x = cut, fill = clarity)) # multiple categorical variables are stacked by default
+# if you changed coordinate system to polar coordinates you'd get a pie chart!
 
+ggplot(diamonds) + geom_bar(aes(x = cut, fill = clarity),
+  position='dodge') # conditional bar char - bars are contingent on clarity - no longer stacked
+```
 
 `geom_boxplot`
 ----------------
+good way to quickly visualise continuous data i.e. outliers, skewness etc.
 
+# univariate box plot
+```{r}
+ggplot(diamonds) + geom_boxplot(aes(x = "carat", y = carat))
+ggplot(diamonds) + geom_boxplot(aes(y = carat)) # this does the same thing - don't need to specify the x variable
+```
+# conditional box plot
+```{r}
+ggplot(diamonds) + geom_boxplot(aes(x = cut, y = carat)) # multiple different categories
+```
 
 `geom_line`
 -------------
-
+```{r}
+ggplot(CO2) + geom_line(aes(x = conc, y = uptake)) # this looks like nonsense - let's plot things separately according to a grouping variable e.g. 'plant'
+```
+# Grouping
+```{r}
+ggplot(CO2) + geom_line(aes(x = conc, y = uptake, group=Plant)) # this is much better - we have plotted each group separately
+```
+# Colour Scale
+```{r}
+ggplot(CO2) + geom_line(aes(x = conc, y = uptake, colour=Plant)) # plot separately and colour each plot with a different colour & this also applies a legend! - standard now to represent things by two different scales to satisfy visual cues i.e. colour & shape, colour & line type
+```
 
 `geom_point`
 ------------
+# Shape & Colour scale based on categorial variables in the data
+```{r}
+ggplot(CO2) + geom_point(aes(x = conc, y = uptake, colour=Treatment, shape=Treatment))
+ggplot(CO2) + geom_point(aes(x = conc, y = uptake, colour=Plant, shape=Type))
+glimpse(CO2)
+```
 
 `geom_smooth`
 ------------
+# Useful as a diagnostic tool when contemplating what model to fit the data to BUT not appropriate for statistical analysis!!!!
+```{r}
+ggplot(CO2) + geom_smooth(aes(x = conc, y = uptake), method='lm') # runs a statistical model to fit a smoother to your data in the background (in this case the method is lm i.e. linear model) & plotting line of best fit & confidence intervals
+
+# now add data to the smoothed plot
+ggplot(CO2) + geom_smooth(aes(x = conc, y = uptake), method='lm') +
+  geom_point(aes(x=conc,y=uptake)) # we can see a linear model is not the best option for this dataset - so geom_smooth can be a good quick diagnostic tool when initially looking at your data to see what model might be best to approximate the data
+```
+# Smooth by grouping variable
+```{r}
+# what if we smoothed by a grouping variable - this might help visualise the patterns??
+ggplot(CO2) + geom_smooth(aes(x = conc, y = uptake, group=Plant), method='lm') +
+  geom_point(aes(x=conc,y=uptake))
+```
+# Smooth using a GAM instead of lm (i.e. different smoothing method)
+```{r}
+ggplot(CO2) + geom_smooth(aes(x = conc, y = uptake, group=Plant)) +
+  geom_point(aes(x=conc,y=uptake)) # by not specifying the method, ggplot defaults to GAM (generalised linear model) as the model to fit
+```
 
 `geom_polygon`
 ----------------
+# Making maps - R has some good packages for this - sort of derived from GIS
 
 `geom_tile`
 ----------------
 
 `geom_raster`
 ----------------
+
+EXAMPLES - GEOM_POINT
+----------------------
+# Store instructions for making a graph in ggplot
+```{r}
+p <- ggplot(data=BOD)
+p <- p + geom_point(aes(y=demand,x=Time))
+p # this is doing print(p) - need to write print(p) if you're writing it in a function
+```
 
 Secondary geometric objects
 ============================
@@ -126,14 +232,59 @@ Secondary geometric objects
 
 Coordinate systems
 ====================
-
+# Default in R: cartesion coordinates
+```{r}
+ggplot(CO2)+geom_point(aes(x=conc,y=uptake))+
+  coord_cartesian() 
+```
+# Flip x & y
+```{r}
+ggplot(CO2)+geom_point(aes(x=conc,y=uptake))+
+ coord_flip()
+```
+# Polar coordinates - good for cyclical data
+```{r}
+ggplot(CO2)+geom_point(aes(x=conc,y=uptake))+
+  coord_polar()
+```
+# Orthographic coordinates - can change projections & reference system for maps
 
 Scales
 ==========
 
 `scale_x_` and `scale_y_`
 ----------------------------
+# Naming axes
+```{r}
+ggplot(CO2, aes(y=uptake,x=conc)) + geom_point()+
+  scale_x_continuous(name="CO2 conc") # what about superscripts? mathematical notation? greek letters?? we need a better way to name axes!
 
+# we need to use an expression to do this - NB cannot have spaces in an expression!:
+ggplot(CO2, aes(y=uptake,x=conc)) + geom_point()+
+    scale_x_continuous(name=expression(
+      Ambient~CO[2]~concentration~(mg/l))) # ~ is a space, [] is subscript, ^ is superscript
+# reference for how to write different characters - type demo(plotmath) into console and press enter to see all the different ways to get symbols
+```
+# Expanding axes
+```{r}
+ggplot(CO2, aes(y=uptake,x=conc)) + geom_point()+
+  scale_x_continuous(name="CO2 conc", expand=c(0,200)) # c(multiplier, addition) c(0,200) means 0 don't mulitiply scale but add 200 units - i.e. how to scale axes
+```
+# Axis on a log scale
+```{r}
+ggplot(CO2, aes(y=uptake,x=conc)) + geom_point()+
+  scale_x_log10(name="CO2 conc",
+    breaks=as.vector(c(1,2,5,10) %o% 10^(-1:2))) # breaks specifies where to put the tick marks & labels on the x axis 
+# 10^(-1:2) creates a vector of integers from 10^-1 to 10^2
+# %o% operator means calculate the outer product so c(1,2,5,10) %o% 10^(-1:2)) gives you the outer product of c(1,2,5,10) & c(0.1,1,10,100) - we want to make the matrix result a vector so provide as.vector and that will give the vector required for where to put the tick marks
+
+# if you change to log scale or square root scale you should identify the breaks / tick marks so it's more sensible
+```
+# Scale categorical data
+```{r}
+ggplot(CO2, aes(y=uptake,x=Treatment)) + geom_point()+
+  scale_x_discrete(name="Treatment")
+```
 Other scales
 ---------------
 
@@ -155,26 +306,111 @@ Other scales
 `scale_fill` and `scale_color`
 -------------------------------
 
+EXAMPLES - SCALES
+---------------
+```{r}
+(p <- p + scale_x_sqrt(name="Time")) # changes scale of axes (doesn't change the data) # NB you should plot raw data on transformed scales, not transformed data on linear scale - this is important! easier to read the graph & interpret raw data
+(p <- p + scale_x_log10(name="Time"))
+```
+
 Facets
 ==========
+# matrices of plots
+# facet_wrap
+```{r}
+ggplot(CO2,aes(x=conc,y=uptake, colour=Type))+
+  geom_point()+   
+  facet_wrap(~Plant)+    # facet on the plant - we want a different plont for each plant type
+  geom_smooth()    # smooth each graph
+
+# only time order matters is when each layer is drawn so smooth before points means the gray smooth is drawn before the points
+```
+# Change scale for each graph in facet
+```{r}
+ggplot(CO2)+geom_line(aes(x=conc,y=uptake, colour=Type))+ 
+facet_wrap(~Plant, scales='free') # free scales means the scales appear on every single graph
+ggplot(CO2)+geom_line(aes(x=conc,y=uptake, colour=Type))+ 
+facet_wrap(~Plant, scales='free_y') # free scale only for y axis, free_x will do free axes only for x axis
+```
+# facet_grid
+```{r}
+ggplot(CO2)+geom_point(aes(x=conc,y=uptake, colour=Type))+ 
+facet_grid(Type~Treatment) # MUST have common x & y axes - can't differ axes like you can in facet_wrap
+```
 
 Themes
 ==========
+Default theme in R is theme_grey()
+type in theme_classic() into console to see all of the specified features - then you can see how to change certain bits
 
 `theme_classic`
 ----------------
-
+```{r}
+ggplot(CO2, aes(y = uptake, x = conc)) + geom_smooth() +
+    geom_point() + theme_linedraw() # just changes a bunch of stuff to make the graph look different which you can type out and code manually but these are just pre-packaged themes - can start with a theme and then make changes on top of that
+```
 `theme_bw`
 ----------------
-
+```{r}
+ggplot(CO2, aes(y = uptake, x = conc)) + geom_smooth() +
+    geom_point() + theme_bw()
+```
 `theme_grey`
 ----------------
-
+```{r}
+ggplot(CO2, aes(y = uptake, x = conc)) + geom_smooth() +
+    geom_point() + theme_grey()
+```
 `theme_minimal`
 ----------------
-
+```{r}
+ggplot(CO2, aes(y = uptake, x = conc)) + geom_smooth() +
+    geom_point() + theme_minimal()
+```
 `theme_linedraw`
 ----------------
-
+```{r}
+ggplot(CO2, aes(y = uptake, x = conc)) + geom_smooth() +
+    geom_point() + theme_linedraw()
+```
+# changing specific parts of a theme
+```{r}
+ggplot(CO2, aes(y = uptake, x = conc)) + geom_smooth() +
+    geom_point() + theme_classic() + theme(axis.title.x=element_text(margin=margin(t=2,unit='pt')))
+```
 Practice
 ===========
+
+EXAMPLES - GEOM_POINT WITH OPTIONAL MAPPING
+--------------------------------------------
+# Colour
+```{r}
+ggplot(CO2) + 
+  geom_point(aes(x=conc,y=uptake), colour="red")      # colour can be coded with words
+
+ggplot(CO2) + 
+  geom_point(aes(x=conc,y=uptake), color="#ff0000")   # colour can be coded with a hash code - refer to R colour chart for hash codes
+
+# but there's no scale saying what the red dots mean!
+```
+# Aesthetics & Scale
+```{r}
+ggplot(CO2) + 
+  geom_point(aes(x=conc,y=uptake, color="blue")) # anything INSIDE the aesthetic has a scale - if it's OUTSIDE the aesthetic it DOESN'T have a scale - if it's outside it's treated literally, if it's inside the brackets it's not treated literally, it says colour it according to what groups I have
+```
+# Graphing different statistics - input raw data, plot summary data
+```{r}
+ggplot(CO2)+geom_point(aes(x=conc,y=uptake),
+ stat="summary",fun.y=mean) # adds mean to the graph - passing raw data and plotting aggregated data - this isn't the best way to do things - you should aggregate your data first then pass directly to the graph
+```
+Exporting graphs
+================
+# how to export a pretty graph from R??????
+```{r}
+# first store graph
+g1 <- ggplot(CO2, aes(y = uptake, x = conc)) + geom_smooth() +
+    geom_point() + theme_linedraw()
+ggsave(filename='/Users/sfulton/OneDrive - James Cook University/JCU/R/AIMSJCU ML R COURSE/ML R COURSE/testgraph.png', g1, width=5, height=5, units='cm',dpi=300) # default unit for size are in inches so can specify units if need be # can set resolution also
+
+# good to have a folder called output and then others inside that called tables, figures etc. 
+```
