@@ -94,6 +94,7 @@ The aim of the analysis is to investigate the relationship between mussel clump 
 ```{r readData, results='markdown', eval=TRUE}
 peake = read_csv('../data/peakquinn.csv', trim_ws=TRUE)
 glimpse(peake)
+# we want to see if there is a relationship between number of individuals (COUNT DATA - NON-NEGATIVE DISCRETE - use Poisson distribution) and area of mussel bed (CONTINUOUS NON-NEGATIVE REAL) - so we'll do a glm using Poisson distribution
 ```
 
 
@@ -104,6 +105,29 @@ $$
 y_i \sim{} \mathcal{Pois}(\lambda_i)\\
 ln(\lambda_i) = \beta_0 + \beta_1 ln(x_i)
 $$
+observed data follows Poisson distribution - our link function is log 
+
+as always, start with exploratory data anlaysis:
+
+```{r scatter plot}
+peake %>% ggplot(aes(x=AREA,y=INDIV))+
+  geom_point()+
+  geom_smooth()
+
+# ooo what have we got here?! firstly, variance looks like it changes throughout the trend - it starts of tight then gets more varied; it's also not linear; the observations are concentrated at small areas so it looks like area is some sort of skewed distribution (x axis is always assumed to be a uniform distribution, or at worst a normal distribution - but here they are skewed!)
+
+```
+```{r}
+# we could transform x  and see what that looks like, but we could also just plot it on a log scale:
+peake %>% ggplot(aes(x=AREA,y=INDIV))+
+  geom_point()+
+  geom_smooth()+
+  scale_x_log10()+
+  scale_y_log10()
+
+# on transformed axes, we have something that looks more like a straight line so applying a log function to the x values and a log function to the y values should allow us to apply a linear model - variance looks pretty homogenous, values evenly distirbuted along x axis, trend is linear - all good to go!
+```
+
 
 
 # Fit the model

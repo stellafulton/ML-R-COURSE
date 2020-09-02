@@ -83,21 +83,26 @@ Coronadito   15.17   0
 **PA**       Presence (1) or absence (0) of *Uta* lizards on island.
 ------------ -----------------------------------------------------------------------------------------
 
-
-
-
-The aim of the analysis is to investigate the relationship between island parimeter to area ratio and the presence/absence of Uta lizards.
+The aim of the analysis is to investigate the relationship between island perimeter to area ratio and the presence/absence of Uta lizards.
 
 # Read in the data
 
 ```{r readData, results='markdown', eval=TRUE}
-polis = read_csv('../data/polis.csv', trim_ws=TRUE)
+
+# read in data
+polis = read_csv('../data/polis.csv', trim_ws=TRUE) # remember trim_ws gets rid of the white spaces - always do this 
+
+# quickly view data
 glimpse(polis)
 head(polis)
 str(polis)
+
+# Binomial dsitribution generates presence/absence data - so cannot assume Gaussian distribution 
+
+# so we need to link the linear predictor back to the scale of our data (i.e. link all real numbers to [0,1] - this link is called a logit link which is just log(p/(1-p)) ) - there are other link functions (e.g. complementary log log, but here we will use the logit function - and this is the default)
+
 ```
 
- 
 # Exploratory data analysis
 
 Model formula:
@@ -105,18 +110,166 @@ $$
 y_i \sim{} \mathcal{Bin}(n, p_i)\\
 ln\left(\frac{p_i}{1-p_i}\right) = \beta_0 + \beta_1 x_i
 $$
+first line y(i) ~ B(n,p(i):
+observed data (y) is distributed according to a Binomial distribution (data have been generated from a Binomial)
+B(number of trials, probability of success) - in this case B(1,p)
 
+second line ln(p(1-p))=B(0)+B(1)x(i):
+relates p to the linear predictor (i.e. using the link function)
 
+we're going to be working on a log scale - Binomials are the most complicated to interpret because of this
+
+```{r create scatter plot for initial data assessment}
+polis %>% ggplot(aes(x=RATIO,y=PA))+
+  geom_point()
+
+# we can see from this plot that when PA ratio is really low, lizards are present, as PA increases, there are more instances where lizards are absent, but there is some overlap so we can run a statistical test to see if there's a real pattern
+
+# we would estimate that at low PA ratios the probabilty of presence is high, and high PA ratios the probability of presence is low - this is our expectation based on just looking at the data
+```
 # Fit the model
+
+```{r fit model using binomial distribution & logit link funciton}
+# cannot use lm function because we are not using Gaussian distribution so we use glm for gnerealised linear model
+polis_glm <- glm(PA~RATIO, family=binomial(link='logit'),data=polis) # must state relationships between variables, the family of distributions you're using and what link, and what data you're applying the model to
+```
 
 # Model validation
 
+```{r validate model i.e. test assumptions}
+# now we need to validate the model to see if it obviously violates any assumptions
+autoplot(polis_glm,which=1:6,label.repel=TRUE)
+
+# residuals vs. fitted plot: residuals (variation along y axis) plotted against the fitted values - difficult to interpret for binary data - can only get an idea of 'is it still roughly centred around zero'? in this case it is, but that's about all you can get out of this plot for binomial distribution
+
+# scale-location: standatdised residuals plotted against predicted values - same as above there's not much you cna get out of this plot for Binomial distirbution
+
+# Q-Q plot - comparing your data to a Binomial dsitribution - if it's a straight line then your data maps the distribution it was expecting
+
+# last 3 plots relate to influence of each observation - Cook's distance is most critical - 0.8 or above is the cut off for significantly influential observations - here observation 3 is more influential in drivign the trend than any of the others - it's likely in this case that it's an island you wouldn't expect them to be on and they are there, or you would expect them and they're not there - so let's investigate this by plotting again but with observation numbers
+
+```
+
+```{r plot again using observation number}
+polis %>% mutate(Obs=1:n()) %>%  # adding a new variable Obs which is just the number of the observation
+  ggplot(aes(x=RATIO,y=PA))+
+  geom_text(aes(label=Obs)) # put text onto the plot instead of points 
+
+# yep here we see that observation 3 doesn't represent what's going on with the others - so something must be different on this island perhaps - we'll leave the data point in there - you could run analysis with and without that point to see the influence 
+```
+
 Explore a lack of fit
+```{r determining goodness of fit}
+# for bionmial 
+# explore dispersion parameter - to see if there's any evidence of overdispersion
+# we normally assume the mean & the variance are the same BUT if your data are more variable than what you would expect then it's overdispersed (i.e. the model will be overdispersed)
+
+# look at goodness of fit to see if your model is good - this is related to dispersion
+
+# calculate sum of squares & then compare to what you expect - if more, than the model is not a good fit
+
+# here we will calculate the sum of the squared residuals - if small then it's a good fit, if large, then not so good fit!
+polis_resid <- sum(resid(polis_glm, type="pearson")^2)
+
+# but what do we expect? - we compare to a chi-squared distribution - distribution of sum of squares should follow a chi-squared distribution - referring to the chi squared distribution that has the same degrees of freedom as our residuals
+1-pchisq(polis_resid,polis_glm$df.resid) # interpret this as 'is there any evidence for a lack of fit?' - if this value is greater than 0.05 then there's no evidence for a lack of fit, if less than 0.05 then there is evidence for a lack of fit (interpret the same way as a p-value)
+
+# this goodness of fit test is not really fair .... but the glm we applied is not trying to minimising the residuals - so not fair to judge the model based on a metric that the model was not trying to optimise in the first place - glm works with maximum likelihood - NOT with ordinary least squares 
+
+```
+
+```{r explore goodness of fit using deviance}
+# instead of using residuals, we use deviance - deviance should also follow a chi squared distribution - deviance is calculated from the likelihood - the larger the deviance the further you are away from the expectation but it is calculate directly from lieklhood which is a property we are trying to model against 
+
+1-pchisq(polis_glm$deviance,polis_glm$df.resid) # this result suggests there is no evidence for a lack of fit so the model we applied is sufficient! woo hoo! BUT what if it was no good
+
+polis_glm$df.resid # degrees of freedom are 17 because 19 the slope minus the intercept - aren't related to the residuals - don't worry too much about this
+
+# reasons for a bad fit & what you could do when the model doesn't fit the data:
+# model might be too simplistic - might need to add a covariate
+# model might be overdispersed - i.e. too variable - adding a covariate might help this also
+# might need to fit a mixture model e.g. beta-binomial in this case, - when you do this the mixture model accounts for the extra variability
+```
 
 # Model investigation / hypothesis testing
 
+```{r effects plot}
+plot(allEffects(polis_glm,residuals=TRUE),type='response') # this displays the change in probability of being present in relation to the change in PA ratio  - this line is not straight - rate of change is therefore not constant
+
+# pink line is a smoother through the dots - not particularly useful for Binomial plots because it's not supposed to be linear
+```
+
+```{r}
+plot_model(polis_glm,type='eff',show.data=TRUE) # this looks reasonable
+```
+# Now to interpret the coefficients we get from this model
+```{r model summary}
+summary(polis_glm)
+
+# we get an estimate of the intercept
+# we get an estimate of the slope
+
+# we get hypothesis tests associated with both
+
+# the slope -0.2196 tells us for a decrease in island RATIO by one unit, the log(p/(1-p))  decreases by 0.2196 - so this doesn't really tell us much in this form
+
+exp(-0.2196) # so if we remove the log function then p/(1-p) = 0.8 - raito of probability of success to probability failure is close to 1 - proabbiltiy of absence is slightly more than probabiltiy of presence => for 1 unit increase in PA ratio, odds of presence decline by 20% (because the multiplier is 0.8) - be careful that you don't interpret this incorrectly!!! 
+
+# change in probability of success (p) is not linear (i.e. not constant) - it is the odds of it being present that remains constant - i.e. p/(1-p)
+```
+
+```{r print out summary in pretty table}
+polis_glm %>% tidy(conf.int=TRUE) %>% kable(digits = 2)
+```
+# how to find the point at which the probability of success is 0.5
+# ratio of the -intercept to the slope:
+```{r the inflection point}
+(ld50 <- -polis_glm$coef[1]/polis_glm$coef[2])
+```
+
+# MASS (modern applied statistics in S)
+```{r}
+# MASS is a package in R which calculates the ratio of intercept to the slope & gives you standard errors also
+
+(ld <- MASS::dose.p(polis_glm,p=c(0.5,0.9)))
+```
+
+# Now what about the strength of the relationship?
+```{r}
+# r^2 value is what we use for a linear model to tell us how strong the relationship is (the proportion of variance that can be explained by the model)
+# for a generalised linear model, we determine strength of relationship from the deviance:
+
+# 1 - (deviance from actual model / model with no predictors where no variance is explained)
+
+1-(polis_glm$deviance/polis_glm$null) # result 0.459 shows the proportion of explained variance (have to subtract from 1 because the stuff in brackets calculates the proportion of variance you can't explain)  (deviance is measure of how far away the data is away from the model) - total deviance - null model(nothing in it so none of the variance can be explained) 
+
+# so this model explains around 46% of the variance in the data
+```
+
 
 # Predictions
+```{r create graph of model}
+# now let's create our own graph of the model we applied - first need to create some possible values to predict from
+polis_grid <- polis %>% data_grid(RATIO=seq_range(RATIO, n=100)) # so here's 100  values from the possible range that we could have for the variable RATIO - use this for predicting
+
+# now we use the emmeans function to make the predictions using our model
+polis_new <- emmeans(polis_glm, ~RATIO,at=polis_grid,type='response') %>% 
+  as.data.frame # here type = RESPONSE - this means we need it to do the back transformation from a log odds scale to a probability scale - we want scale of our predictions to be the same scale as repsonse 
+
+# now we can plot our predicted values & confidence limits:
+ggplot(polis_new,aes(x=RATIO,y=prob))+
+  geom_ribbon(aes(ymin=asymp.LCL,ymax=asymp.UCL),fill='blue',alpha=0.2)+
+  geom_line()+
+  theme_classic()+
+
+# so here we have a plot of our model! woo hoo! you could then add on your observed data points: 
+ggplot(polis_new,aes(x=RATIO,y=prob))+
+  geom_ribbon(aes(ymin=asymp.LCL,ymax=asymp.UCL),fill='blue',alpha=0.2)+
+  geom_line()+
+  theme_classic()+
+  geom_point(data=polis,aes(x=RATIO,y=PA),colour='green')
+```
+
 
 
 
