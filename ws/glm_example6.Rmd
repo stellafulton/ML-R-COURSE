@@ -108,6 +108,12 @@ Autumn   Low       14         3.74           AutumnLow
 quinn = read_csv('../data/quinn.csv', trim_ws=TRUE)
 glimpse(quinn)
 summary(quinn)
+
+# declare categorical variables are factors (they are by default read in as characters)
+quinn <- quinn %>% mutate(SEASON=factor(SEASON),DENSITY=factor(DENSITY))
+
+# response data is count data so probably Poisson distribution for this one
+# categorical predictors so a boxplot would be useful for exploratory analysis
 ```
 
 
@@ -125,20 +131,62 @@ $$
 where $\boldsymbol{\beta}$ is a vector of effects parameters and $\bf{X}$
 is a model matrix representing the intercept and effects of season, density and their interaction on mussel recruitment.
 
+```{r exploratory boxplot}
+quinn %>% ggplot(aes(x=SEASON,y=RECRUITS,fill=DENSITY))+ # put the one with the most groups on the x axis & the one wth less groups as the different colours
+  geom_boxplot()
+
+# seems here box plot lower down on y axis are smaller so possibly a relatioship b/w mean & variance (this would be a problem for Gaussian, but not a Poisson)
+
+# NB: problem with transforming data - when you predict, low predictions & error bars below zero (square root transformations can be very dangerous because of how the square root function works on pos vs. neg & numbers between 0 and 1 for example) - so DON'T DO THIS!!!!
+
+# plot on transformed axes
+quinn %>% ggplot(aes(x=SEASON,y=RECRUITS,fill=DENSITY))+ 
+  geom_boxplot()+
+  scale_y_log10()
+
+# a good starting point is Poisson - model we want to fit will have 2 categories & their interactions
+
+```
 
 # Fit the model
+```{r fitting}
+quinn_glm1 <- glm(RECRUITS~DENSITY*SEASON,data=quinn,family=poisson(link='log')) # DENSITY*SEASON is shorthand for DENSITY + SEASON + DENSITYxSEASON just FYI
 
+```
 
 # Model validation
-
-
-
-
-
-
-
+```{r validation}
+autoplot(quinn_glm1,which=1:6)
+# residuals plot looks fine
+# Q-Q normal plot looks fine
+# observation 34 has a large Cook's D so that's a bit of a concern - need to have a look at that (if this was your own data to check why)
+```
 
 # Model investigation / hypothesis testing
+Goodness of fit
+```{r goodness of fit}
+1-pchisq(quinn_glm1$deviance,quinn_glm1$df.residual) # this number is really small!! so there is evidence for a lack of fit! oh no!
+```
+Overdispersion
+```{r overdispersion}
+quinn_glm1$deviance/quinn_glm1$df.residual # yes, data are overdispersed so there's more variance than expected from a Poisson - hmmm could be something to do with the zeros in our data.... - are there too many??
+```
+Excessive zeros ?
+```{r}
+# how many zeros do we have ? compare this with how many we expect to get - ideally we should do this with each population
+ggplot(quinn_glm1,aes(x=SEASON,y=RECRUITS,fill=DENSITY))+
+  geom_boxplot()
+
+# to calculate proportion of zeros we have relative to how many we expect:
+# this calculates how many zeros we have
+quinn %>% group_by(SEASON,DENSITY) %>% 
+  summarise(Mean=mean(RECRUITS),Zeros=sum(RECRUITS==0),Total=n()) %>% 
+  mutate(Prop=Zeros/Total)
+# this is how many zeros we expect from Poisson:
+sum(rpois(1000000,lambda=2.67)==0)/1000000 # ok so only expect about 7% zeros
+
+# so we have too many zeros in our dataset so we will need to try a Negative Binomial to see if that absorbs the overdispersion - if not, might have to try a zero-inflated model
+```
 
 
 

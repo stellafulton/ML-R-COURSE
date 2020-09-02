@@ -39,6 +39,8 @@ mathfont: LiberationMono
 monofont: DejaVu Sans Mono
 classoption: a4paper
 bibliography: ../resources/references.bib
+editor_options: 
+  chunk_output_type: inline
 ---
 
 ```{r setup, include=FALSE, warnings=FALSE, message=FALSE}
@@ -95,6 +97,16 @@ The aim of the analysis is to investigate the effects of a range of predictors o
 ```{r readData, results='markdown', eval=TRUE}
 loyn = read_csv('../data/loyn.csv', trim_ws=TRUE)
 glimpse(loyn)
+head(loyn)
+
+# our data is about forest birds in SE Aus & how they respond to habitat fragmentation
+# response: abundance of birds
+# predictors: stated above - 6 variables - multiple predictors - so here we have potentially 6 covariates - therefore we'll have 6 partial slopes (aka partial effects) (partial because they are not the same as if you did 6 individual regressions - they are the effect of one variable whilst holding the others set to their averages)
+
+# so what model could we use here?? 
+# the abundance data is NOT discrete count data - it is the average of the multiple quadrats they performed - so what distribution might generate averages? a Gaussian dsitribution could generate means - so this is a good starting option
+# if the distribution is skewed then perhaps a Gamma distribution
+# range of values will be [0,inf)
 ```
 
 # Exploratory data analysis
@@ -109,35 +121,179 @@ where $\boldsymbol{\beta}$ is a vector of effects parameters and $\bf{X}$ is a m
 the scaled versions of distance (ln), distance to the nearest large patch (ln), patch area (ln), grazing intensity, year of isolation and 
 altitude on the abundance of forest birds.
 
+Let's try Gaussian to start off with - remember our assumptions:
+ - normality
+ - homogenity of variance
+ - linearity
+ - independence
+ - multi-colinearity (you shouldn't have correlated predictors in the same model - the model won't be able to be abel to definitively tell you the effect of each predictor - may overestimate the effect of one of them & underestimate the effect of another one)
+ 
+ NB: if you're not interested in the covariates themselves, and you're just adding them in to make the model better then it's fine for them to be correlated
+ 
+```{r scatter plot matrix for multiple variables}
+scatterplotMatrix(~ABUND+DIST+LDIST+AREA+GRAZE+ALT+YR.ISOL,data=loyn,diagonal=list(method='boxplot'))
+# abundance is on the y axis of all of the plots in the first row, so on so forth
+# abundance is on the x axis of all of the plots in the first column, so on so forth
 
+# most diagnostics are difficult to assess if non-normal data i.e. hard to tell if non-homogenous variance if the data is not normal
 
+# we can see here DIST, LDIST & AREA are not normally distirbuted based on their box plots, so let's apply a log transform to those & see what that looks like
+```
+ 
+```{r test assumptions}
+scatterplotMatrix(~ABUND+log(DIST)+log(LDIST)+log(AREA)+GRAZE+ALT+YR.ISOL,data=loyn,diagonal=list(method='boxplot'))
+# look at the first row - relationships of abundance (on y axis) with all the other vairbales on the x - they all look pretty of in terms of linearity - none of the trends that are present look non-linear, homogeneity of variance looks ok - now what about co-linearity??
 
+# co-linearity - are there any strong trends between any pairs of the predictors? hmm looks like there might be some correlations there - need to make a decision if we really need all of the predictors in this model? could fit models with different predictors to see what works 
+
+# let's leave it in for the moment - there's more we can do later on to see whether leaving them in creates problems 
+
+# note on centering - remember if you centre the data then the intercept has a relevant meaning - centering also has implications for the maximum likelihood calculations (makes it easier to find them) - so when you have multiple predictors it's a good idea to centre your predictors) - will be computationally more effective
+
+# NB: magnitude of slope is determined by scale of the predictor so if you centre your data, you standardise scale of predictors so you can compare magnitude of effect of different predictors - also good idea to standardise standard deviation (particularly important for Bayesian analyses)
+
+# if you're going to include multiple predictors, scale your data! can either mutate you original dataset, or doing it inline (like we just did above) - must scale after logging - so centre your data first, then scale
+```
+```{r centre & scale data}
+loyn <- loyn %>% mutate(fGRAZE=factor(GRAZE)) # turn the GRAZE variable into a categorical factor variable
+```
+ 
 # Fit the model
+```{r fit linear model}
+# we've decided that Gaussian is a good model perhaps, so use ordinary least squares - just need to fit a linear model
+loyn_lm <- lm(ABUND~scale(log(DIST))+scale(log(LDIST))+scale(log(AREA))+fGRAZE+scale(ALT)+scale(YR.ISOL),data=loyn)
 
+# scale() function just standardises the data so that it has a mean of 0 and standard deviation of 1
+
+# scale inside the model so that it will back transform for us when we do emmeans 
+```
 
 # Model validation
-
-
+```{r test assumptions}
+autoplot(loyn_lm,which=1:6)
+# residuals look ok, Cook's D is nice and small, variance is homogenous - so everything is looking ok, but what about colinearity? to investigate this we look at variance inflation:
+vif(loyn_lm) # variance inflation factor (VIF) - this tells you how correlated each predictor is to the rest of them - regress each predictor against all the rest of them i.e. DIST ~ LDIST + GRAZE + etc. etc.
+# ideally you want the values under 3, but under 5 is fine - that equates to about 0.8 r^2, value of 3 would be r^2 of 0.6 - if above 3 then they are suspicious & they can't be put in the same model as the others
+# with categorical variables, can't use regular VIF - so need to look at third column - if you didn't have a categorical variable, you won't even get the third column
+# refer to third column here - all values are below 3 so all our predictors are ok - so no issues with the mulitple predictors & we meet the co-linearity assumption - all good to go!
+```
 
 # Model investigation / hypothesis testing
 
 
 # Predictions {.tabset .tabset-faded}
+```{r effects plot}
+plot(allEffects(loyn_lm,residual=TRUE),type='response') # here each plot is a partial effect plot - e.g. effect of area, holding all others constant (aka marginal - effect of area marginalising over all other variables) - could refer to it as marginal means plot
 
+# autoplot not super effective for multiple predictors so we don't do that here
+```
+# Summary
+```{r}
+summary(loyn_lm) # this says grazing level 5 is different to grazing level 1 (the intercept), but the other levels aren't really different to grazing level 1
+# area seems to have an effect based on the summary
 
-## Option 1 - dredge
+# because we scaled the data, the intercept has meaning 
+# the intercept here (22) is the average abundance of birds at the average of all the other predictors - when all the predictors are at their average, we expect 22.47 birds
+# at grazing level 5, we expect 12.47 less birds
+# because we scaled, the magnitude of the estimated values is proportional to the effect size 
 
+# parsimony would suggest we should only be fitting a model as simple as possible - we shouldn't be adding complexity if it's not needed - we don't need to put every predictor into the model 
 
-## Option 2 - model averaging
+# to work out what predictors to keep
+# we can use AIC values - run every single combination of possible models and see which has lowest AIC values - this is called dredging 
+# dredging is a bit of a fishing expedition - may not identify the most ecologically best model
+```
+## How to work out which predictors to keep in the model & therefore which model to select??
+## Option 1 - dredge - select mathematically based on AIC values
+```{r}
+loyn_lm <- update(loyn_lm,na.action=na.fail) # if any missing values are encountered, then that particular combination of model will fail - the default is to ignore the missing value but here we're saying, don't remove the missing value just remove it all together - because we need a fair comparison between models  - in this case we don't have any missing values, but you have to specify this otherwise you can't dredge
 
+dredge(loyn_lm,rank="AICc") # dredge the loyn linear model, and rank them according them to AICc
 
-## Option 3 - explore a small set of models
+# the results of the dredge say that the 6th model it ran had the lowest AIC which included intercept (they all include the intercept), grazing, and area - didn't include anything else - so this is mathematically the best model (this does not always mean it is the best model ecologically)
+```
 
+## Option 2 - model averaging - not a good approach
+You could average possible model combinations (from above) rather than just picking the model with the lowest AIC value- e.g. average all the models that have AIC values close together (within 4 units) - uses weighted average 
+```{r}
+loyn_av <- model.avg(dredge(loyn_lm,rank="AICc"),subset=delta<=4) # we don't think this is a very good idea to do this - NOT A GOOD APPROACH
+```
+
+## Option 3 - explore a small set of models - come up with small set of models that speak to different ecological drivers - BETTER APPROACH - selecting ecologically - this is the favoured approach at the moment - it's a combination of the stats & what is ecologically sensible
+```{r}
+# might identify 5 condidate models that might have something to do with different drivers - then assess models and identify which ones are useful - which ones are telling you something about the system?? - this is a better approach
+
+# ok so let's choose some different models with different predictor combinations in them:
+loyn_lm1 <- update(loyn_lm,.~scale(log(DIST))+scale(log(LDIST))) #. means keep what is already there and then change what comes after 
+loyn_lm2 <- update(loyn_lm,.~scale(log(AREA))+fGRAZE+scale(YR.ISOL))
+loyn_lm3 <- update(loyn_lm,.~scale(log(AREA))+fGRAZE)
+loyn_lm4 <- update(loyn_lm,.~scale(ALT))
+loyn_null <- update(loyn_lm,.~1) # no predictors - just the intercept (i.e. the average)
+
+# if you have a covariate that you know is important then you might include in every model to make them all fair to compare to - i.e. include in every model something that you know effects the response 
+
+AICc(loyn_lm,loyn_lm1,loyn_lm2,loyn_lm3,loyn_lm4,loyn_null)
+
+# we're interested in comparing each of them to the null model - anything that's better than the null model is ok - i.e. it's explaining something (the null model is explaining none of the variance - it's just the average) - so if it's better than the null model it is actually explaining something
+                   
+```
+ok so here, the loyn_lm1 model has only distnace included - AIC greater than null model so it's not useful
+loyn_lm2 with area, grazing and length of isolation is better than the null model so it does explain something 
+loyn_lm4 which included altitude is also better than null model so altitude explains bird abundance to some extent 
 
 # Summary figures
+```{r}
+# let's do a summary figure for just one of the models
+# first need to make up some values to predict from - sadly we can't use data.grid here
+loyn_new <- list(fGRAZE=levels(loyn$fGRAZE),
+                 AREA=seq_range(loyn$AREA,n=100))
+glimpse(loyn_new)
+loyn_new <- emmeans(loyn_lm3,~AREA|fGRAZE,at=loyn_new) %>% # | means conditional on (so in relation to area conditional on grazing level)
+  as.data.frame()
+head(loyn_new)
+loyn_new %>% ggplot(aes(x=AREA,y=emmean,colour=fGRAZE,fill=fGRAZE))+
+  geom_ribbon(aes(ymin=lower.CL,ymax=upper.CL),colour=NA,alpha=0.3)+
+  geom_line()+
+  scale_x_log10(labels=scales::comma)+ # puts a comma in the tick mark labels - can format different ways 
+  scale_y_continuous('Abundance')+
+  theme_classic()
+  
+# emmeans stands for : estimated marginal means
+```
 
+Oh no! we can see on our graph that our model is predicting negative abundance - which does not make sense ecologically - so we used the wrong distribution - should have used Gamma distribution rather then Normal Gaussian dsitribution
 
 # Further/alternative analyses
+
+Ok so let's quickly use Gamma distribution and see how that turns out instead
+```{r Gamma}
+# MULTIPLICATIVE MODEL
+loyn_glm <- glm(ABUND~scale(log(AREA))*fGRAZE,data=loyn,family=Gamma(link='log')) # NB: the default link for Gamma is NOT a log (the default link is the inverse function) # the * means we're going to have an interaction between AREA & GRAZING (multiplicative model)
+
+# ADDITIVE MODEL
+loyn_glm1 <- glm(ABUND~scale(log(AREA))+fGRAZE,data=loyn,family=Gamma(link='log')) # here we just have an additive model
+
+# COMPARE THE TWO USING AIC
+AICc(loyn_glm,loyn_glm1) # AIC values tell us that the multiplicative model is slightly better than the additive model but they're essentially the same so we go with the simplier model which is the additive model - so let's go with that 
+
+summary(loyn_glm1) # parameters are on a log scale so to interpret them ecologically we need to take the exponent of them (undo the log function)
+
+# cannot have zeros in your data when assuming Gamma distribution - so just change all the 0s to a 0.001 or something
+
+```
+
+```{r}
+loyn_glm1_new <- list(fGRAZE=levels(loyn$fGRAZE),AREA=seq_range(loyn$AREA,n=100))
+loyn_glm1_new <- emmeans(loyn_glm1,~AREA|fGRAZE,at=loyn_glm1_new,type='response') %>% 
+  as.data.frame()
+head(loyn_glm1_new)
+loyn_glm1_new %>% ggplot(aes(x=AREA,y=response,colour=fGRAZE,fill=fGRAZE))+
+  geom_ribbon(aes(ymin=asymp.LCL,ymax=asymp.UCL),color=NA,alpha=0.3)+
+  geom_line()+
+  scale_x_log10(labels=scales::comma)+
+  scale_y_log10('Abundance')+
+  theme_classic()
+```
 
 
 # References

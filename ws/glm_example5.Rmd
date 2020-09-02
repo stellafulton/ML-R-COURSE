@@ -99,6 +99,8 @@ S       12
 ```{r readData, results='markdown', eval=TRUE}
 day = read_csv('../data/day.csv', trim_ws=TRUE)
 glimpse(day)
+
+# response data are integers (so Poisson or negative Binomial might be a good option)
 ```
 
 
@@ -112,37 +114,65 @@ $$
 
 where $\boldsymbol{\beta}$ is a vector of effects parameters and $\bf{X}$ is a model matrix representing the intercept and treatment contrasts for the effects of Treatment on barnacle recruitment.
 
+```{r boxplot - because independent (x) variable is categorical}
+day %>% ggplot(aes(x=TREAT,y=BARNACLE))+
+  geom_boxplot()+
+  geom_point(colour='red')
+
+# if using Gaussian we'd need to check if they were all roughly the same size, check if they were skewed or not - this plot looks like Gaussian could be appropriate (BUT just because you satisfy the assumptions of some sort of model you still need to use the ecologically sensible model (which would be Poisson) even though it's ok to use a Gaussian)
+```
+
 
 # Fit the model
-
-
+```{r}
+day_glm <- glm(BARNACLE~TREAT,data=day,family='gaussian')
+day_glm1 <- glm(BARNACLE~TREAT,data=day,family='poisson')
+AICc(day_glm,day_glm1) # mathematically the poisson is slightly better
+```
 
 # Model validation {.tabset .tabset-faded}
+```{r}
+autoplot(day_glm1,which=1:6) # these plots are looking good e.g. the residuals for each group are roughly centred around zero, Q-Q normal plot is looking pretty nice, Cook's distance - only one component makes sense here because the x axis is categorical so leverage makes no sense so Cook's distance doesn't make sense here in this case - ok so nothing alarming here, Poisson seems reliable, but what about a goodness of fit test & overdispersion test?
+```
+goodness of fit
+```{r goodness of fit}
+1-pchisq(day_glm1$deviance,day_glm1$df.residual) # result is >0.05 so no evidence for lack of fit - we're good to go
+```
+overdispersion
+```{r overdispersion}
+day_glm1$deviance/day_glm1$df.residual #close to 1 so mean & variance are close to equal, no overdispersion
+```
+so based on goodness of fit & overdispersion tests we can say that the Poisson model is a good one to go for & we don't need to worry about trying a Negative Binomial
 
-## Gaussian
+NB: we're going to fit a gaussian linear model JUST so we can interpret the coefficients a bit easier - purely for ease of interpretation - we know a Poisson is a good one to go for (but can be a bit tricky to interpret at the end)
 
+```{r summary gaussian model for demonstration of how to interpret coefficients}
+summary(day_glm) # this is the gaussian model - no bakc transformations required so easier to interpret
+# average for algae 1 group is 22.4
+# algae 2 group is value 6 which means 6 more than the first (this is a significant increase)
+# -7.4 means on average 7.4 fewer barnacles less than the algae 1 group - they're all compared to the algae 1 group
+```
 
-## Poisson
+```{r summary of Poisson model}
+plot(allEffects(day_glm1))
+summary(day_glm1)
+# here we're on a log scale because Poission model - so intercept 3.1 we interpret by taking the exponent exp(3.1) = 22.4 which means on average we expect to get 22.4 barnacles on algae 1 surface
+# 0.23 estimate for algae 2 - exp(0.23) = 1.27 this is the multiplier so it's 27% higher than the algae1 group
+# so on average, the number of barnacles on  algae 2 will be 22.4+(22.4*0.27)
 
-
-
-
-
-# Model investigation / hypothesis testing {.tabset .tabset-faded}
-
-## Gaussian
-
-
-
-## Poisson
-
-
-
-# Predictions
-
+anova(day_glm1) # this tells you less than the summary(day_glm1) & can tell you the wrong thing & depends on the order of your factors - so moral of the story - DON'T look at an anova table
+```
 ## Post-hoc test (Tukey's)
+To compare the second group to the other groups and so on so forth you need to do a post hoc test (because the one we just did was only comparing the first group to all the others) - we do a Tukey test (restrains the family-wise error rate to 0.05 i.e. error rate over all the tests we do must be max 0.05 which means the error term for all the individual tests has to be smaller) - there's other tests too (e.g. Bonferroni test etc.)
+BUT we have to protect ourselves from family-wise error rates
+```{r Tukey test}
+emmeans(day_glm1,pairwise~TREAT,type='response') # we don't create a grid because we're dealign with a categorical independent variable - the pairwise bit does pairwise comparisons with the Tukey test applied
+# the contrasts are the comparisons
+# e.g. ALG1 have 0.8 times the number of barnacles on ALG2
 
+# now we have an idea of the magnitude of the effect between the other groups
 
+```
 ## Planned contrasts
 
 Define your own
@@ -152,6 +182,33 @@ Compare:
 a) ALG1 vs ALG2
 b) NB vs S
 c) average of ALG1+ALG2 vs NB+S
+
+```{r planned contrasts}
+# what if we decided if some of these comparisons aren't interesting and we don't want to have them in the model
+
+# can re-parameterise the model - planned contrasts - you specify which comparisons you want your parameters to represent before you go and do all the tests - you can only have p-1 comparisons (so we had 4 before, we can only have 3 parameters - this means we don't have to do any adjustments - so we don't have to compromise power) - we make a contrast matrix (columns sum to zero) - can make comparisons that Tukey test wouldn't automatically do
+
+cmat <- (cbind('Alg1_Alg2'=c(1,-1,0,0),'NB_S'=c(0,0,1,-1),'Alg_Bare'=c(0.5,0.5,-0.5,-0.5)))
+
+# you need to be careful you don't parameterise more comparisons than groups that you have i.e if you have 5 groups, you can only have 4 comparisons & the comparisons need to be INDEPENDENT - how to determine if the comparisons are all independent?? we calculate the cross product of the matrix
+crossprod(cmat) # this gives us all zeros off the diagonal so we know the comparisons are independent 
+```
+
+
+```{r planned comparison}
+emmeans(day_glm1,~TREAT,contr=list(TREAT=cmat),type='response')
+# this shows us on average 80% more barnaclise recruiting on algae surfaces compared to bare
+```
+```{r plot the planned comparisons}
+day_glm1_new <- emmeans(day_glm1,~TREAT,type='response') %>% as.data.frame()
+ggplot(day_glm1_new,aes(y=rate,x=TREAT))+
+  geom_pointrange(aes(ymin=asymp.LCL,ymax=asymp.UCL))+
+  theme_classic()+
+  scale_x_discrete('Treatment',breaks=c('ALG1','ALG2','NB','S'),labels=c('Algae spp 1','Algae spp 2','Naturally bare','Scraped bare'))+
+  geom_point()
+  
+```
+
 
 
 # Summary figures

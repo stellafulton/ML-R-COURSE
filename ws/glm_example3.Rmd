@@ -117,7 +117,7 @@ peake %>% ggplot(aes(x=AREA,y=INDIV))+
 # ooo what have we got here?! firstly, variance looks like it changes throughout the trend - it starts of tight then gets more varied; it's also not linear; the observations are concentrated at small areas so it looks like area is some sort of skewed distribution (x axis is always assumed to be a uniform distribution, or at worst a normal distribution - but here they are skewed!)
 
 ```
-```{r}
+```{r plot on transformed scales}
 # we could transform x  and see what that looks like, but we could also just plot it on a log scale:
 peake %>% ggplot(aes(x=AREA,y=INDIV))+
   geom_point()+
@@ -127,39 +127,127 @@ peake %>% ggplot(aes(x=AREA,y=INDIV))+
 
 # on transformed axes, we have something that looks more like a straight line so applying a log function to the x values and a log function to the y values should allow us to apply a linear model - variance looks pretty homogenous, values evenly distirbuted along x axis, trend is linear - all good to go!
 ```
-
-
-
-# Fit the model
-
-## Candidate models {.tabset .tabset-faded}
-
-### LM
-
-#### Model validation
+### Try out some candidate models:
 
 ### Poisson (GLM)
-#### Model validation
-Explore a lack of fit
 
+# Fit the model
+```{r fit Poisson model}
+peake_glm <- glm(INDIV~log(AREA),data=peake,family=poisson(link='log'))
+```
+#### Model validation
+```{r}
+autoplot(peake_glm,which=1:6)
+# eek this doesn't look good!
+```
+Explore a lack of fit
+```{r lack of fit}
+# let's try a goodness of fit test
+1-pchisq(peake_glm$deviance,peake_glm$df.residual) # it's displaying 0 which means there IS evidence for a lack of fit!!! the model we've chosen is NOT a good fit
+
+# ok so there could be more variance in our data than the Poisson distribtion expects (we expect mean & variance to be the same)
+# our model is probability definitely over-simplistic! because number of individuals is influenced by more than just area - could be where the clump is located, the orientation of the rocks, temporal variation in physical environment etc. etc.! so.... we could add in a proxy for all the other variables we could have measured (mixed effects models - add in another variable that soaks up all the additional noise - their called observation/unit level random effects) since we can't add in a covariate (this is not our data)
+# if it is that the data is more varibale than we expect (the residual plot points to this) - we might be able to fit a model that allows there to be more variability - negative Binomial (this doesn't assume mean & variance are equal - it measures the variance) - sometimes the additional variabilty is because of clustering (this is releavnt to me!!!! i.e. quadrat sampling) - where you have clustering - try negative Binomial (because you don't have strictly independent observations) - this is a useful model for overdispersed data
+
+# excessive zeros can cause overdispersion - often excessive zeros are not because they are real - just artefacts of our inability to detect them - this can be another reason for lack of fit - there are more zeros than what a Poisson would expect - negative Binomial can account for this to a degree - but if lots and lots and lots (more than 30%) of zeros, then we need a completely different model - a zero inflated model - this breaks the problem in two - what proportion of zeros would I expect to get? I'll model that as a Poisson and then model the probability of detecting a zero as a Binomial
+```
 Explore overdispersion
+```{r test for overdispersion}
+# to choose between all these different options we need to know what is causing the poor fit - is it overdispersion?? is it something else? let's find out...
+# calculate dispersion parameter: (ratio of deviance to df)
+peake_glm$deviance/peake_glm$df.residual # should come out as 1 if variance & degrees of freedom (& therefore the mean) are equal - which is what is expected for a Poisson distirbution - if it is >1 then there is overdispersion - more variance than expected by the Poisson distribution
+
+#if dispersion is >3 there is a problem! model not reliable
+# dispersion <3 the model can handle it and the model will be reliable enough
+
+# so we have identified that our model is overdispersed - but why? is it excessive zeros? no, our dataset doesn't have many, so we don't need to fit a zero-inflated model, and we can't add in any more additional variables, so we're going to try for a negative Binomial model instead
+```
 
 ### Negative Binomial (GLM)
-
-#### Model validation
-
-Explore a lack of fit
-
-Explore overdispersion
-
+Fit model
+```{r fit model}
+library(MASS)
+# fit model
+peake_glm1 <- glm.nb(INDIV~log(AREA),data=peake)
+```
+Model validation
+```{r validate model}
+# validate model
+autoplot(peake_glm1,which=1:6) # yep this is much better
+```
+Lack of fit test
+```{r lack of fit}
+1-pchisq(peake_glm1$deviance,peake_glm1$df.residual) # this is <0.5 so there is no evidence for a lack of fit
+```
+Overdispersion test
+```{r overdispersion}
+peake_glm1$deviance/peake_glm1$df.residual # close to 1 so that's good - no overdispersion;  if dispersion = 1, a negative Binomial is a Poisson
+# a Poisson is more parsimonious (simple) than a negative Binomial - Bayesian approach would be 'why not always fit a negative Binomial?'
+```
 ## Comparisons (model selection)
+## AIC values - Aikake Information Criteria
+Negative binomial is a more complex model because it uses more degrees of freedom so it will be penalised more (AIC penalises for model complexity), but if its likelihood is substantially greater than Poisson, then it would be a better model
+```{r}
+AIC(peake_glm,peake_glm1)
+#  the AIC values are relative - depends on the magnitude of repsonse & rpedictos - arbitrary scale 
+# the second model Negative Binomial, had more degrees of freedom - it was using more paramters (slope, intercept, dispersion) than Poisson (slope, intercept) BUT AIC is smaller for negative binomial so it IS a better model
 
+# if AIC values are 2 or more units apart then the models are considered differnt 
 
-# Model investigation / hypothesis testing
+# there are lots of different types of information crtieria - most useful one is the aikake information criteria but there is one that's good for small data sets (use MuMIn package
+library(MuMIn)
+AICc(peake_glm,peake_glm1) # this is the version to use for for small sample sizes 
+```
+Effects plot for negative Binomial
+```{r effects plot}
+plot(allEffects(peake_glm1,residual=TRUE),type='response') # base graphics effects plot - data plotted on scale of response 
 
-# Predictions
+plot_model(peake_glm1,type='eff',show.data=FALSE) # ggplot doesn't show as much information as the base graphics plot because it hasn't back transformed the axes - the data is on the scale of the linear predictor
+```
+Summary for negative Binomial
+```{r}
+summary(peake_glm1)
+# NB: these values are on a log scale so intercept has no relevant interpretation here
+# slope: evidence of a relationship p value < 0.05
+# interpret the slope summary as for every 1 unit change in log(AREA) there is a 0.82 change in log(INDIV)
+# if we get rid of the log but applying exp() function to both sides, we get: for every 1 unit change in log(AREA) we get 2.27 factor increase in individuals log(AREA)=2.27xINDIV (i.e. 130% change)
+tidy(peake_glm1,conf.int=TRUE) # NB: everything is expressed on a log scale
+# tidy will only do the parameters - if you want the AIC, df etc. - use glance
+glance(peake_glm1)
+```
+How about the strength of the relationship?
+```{r r squared value based on deviance}
+# 1 - (deviance / null deviance)
+1-peake_glm1$deviance/peake_glm1$null.deviance # result is 84% of the variance can be explained by the model
+```
+The now accepted way of calculating strength of relationship
+```{r r squared value using MuMIn package}
+r.squaredLR(peake_glm1) # this is a more robust way of calculating r^2 values and is the accepted way of calculating - the other way only works for simplistic models - this is the mixed version - there's another version for non-mixed models
+# this is from the MuMIn package
+```
 
-# Summary figures
+# Predictions & Summary figures
+```{r}
+peake_grid <- peake %>% data_grid(AREA=seq_range(AREA,n=100))
 
+peake_new <- emmeans(peake_glm1,~AREA,at=peake_grid,type='response') %>% 
+  as.data.frame
+
+# plot of model
+ggplot(peake_new,aes(x=AREA,y=response))+
+  geom_ribbon(aes(ymin=asymp.LCL,ymax=asymp.UCL),fill='blue',alpha=0.3)+
+  geom_line()+
+  theme_classic()
+
+# plot of model on log transformed scales & observed data points plotted over top
+ggplot(peake_new,aes(x=AREA,y=response))+
+  geom_ribbon(aes(ymin=asymp.LCL,ymax=asymp.UCL),fill='blue',alpha=0.3)+
+  geom_line()+
+  theme_classic()+
+  scale_x_log10()+
+  scale_y_log10()+
+  geom_point(data=peake,aes(y=INDIV))
+
+```
 
 # References
