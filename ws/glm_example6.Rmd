@@ -61,6 +61,7 @@ library(MASS)      #for glm.nb
 library(MuMIn)     #for AICc
 library(tidyverse) #for data wrangling
 library(modelr)    #for auxillary modelling functions
+library(DHARMa)
 ```
 
 # Scenario
@@ -187,17 +188,108 @@ sum(rpois(1000000,lambda=2.67)==0)/1000000 # ok so only expect about 7% zeros
 
 # so we have too many zeros in our dataset so we will need to try a Negative Binomial to see if that absorbs the overdispersion - if not, might have to try a zero-inflated model
 ```
+Use DHARMa package to deal with mixed effects models & diagnose zero-inflation
+```{r DHARMa package}
+# DHARMa package - calculates residuals via simulations - better at diagnosing issues with residuals, autocorrelation & zero-inflation in mixed effects models because of the way it calculates residuals
 
+simulateResiduals <- simulateResiduals(quinn_glm1,plot=TRUE) # simulates residuals & gives you a plot kind of like autoplot
 
+# plot on left is interpreted like a Q-Q normal plot - we want to see a straight line in a Q-Q normal plot - but here we don't have a straight line - implies there's more data towsards the tails than we would have expected - instead of being a genuine Poisson distribution, there's more data at the tails than expected - this is pretty common
 
+# the Q-Q 'like' plot also overlays some tests: in this case the data has failed the dispersion test & the outlier test - so this tells us there's some problems with overdispersion
+
+# graph on the right is a residual plot but instead of being centred on zero, the residuals are scaled 0 to 1 so they are centred around 0.5 - the red stars indicate residuals have maxed out (i.e. as far under or over as they could be - totally outside range of the simulated data) - this is typically a big red flag for zero inflation - here rather than fitting a single line it fits 3 lines ( 1 is through middle of data ( centred around 0.5) & then 1 centred around 25th quantile, & one centred around 75th quantile - this is because there may not be a straight pattern in your residuals it may be different parts of the pattern operate differently i.e. data with low values might be linear, but high values may be non-linear i.e. different patterns in different parts of your data) - sometimes the bottom line might be wiggly & the other 2 aren't if there is zero inflation & the line will be red - BUT in this case, (NB we have purely categorical data) we don't expect wigglyness in the residuals because we have categorical data 
+
+# DHARMa simulated residuals work better as diagnostic tool
+
+```
+Dispersion test using simulated residuals
+```{r dispersion test}
+testDispersion(quinn_glm1) # dispersion test - same as was on previous graph but more info - we can see here our fitted model is wayyyyy outside the simulated range
+```
+Zero-inflation test using simulated residuals
+```{r}
+testZeroInflation(quinn_glm1) # this shows evidence of excessive zeros (ideally we would want the red line to overlap with one of the grey bars) - so we could address this problem by running a zero-inflated model, or a negative Binomial which can often deal with this problem so let's try that first
+# NB it's not super important know where the zeros are, just that the dataset is zero-inflated
+```
+# Run negative binomial model to deal with zero inflation
+fit model
+```{r fit model}
+# fit model:
+quinn_nb <- glm.nb(RECRUITS~DENSITY*SEASON,data=quinn)
+```
+Test assumptions
+First using autoplot (the residuals that are just distance between observed & expected)
+```{r assumptions testing}
+# run autoplot to test assumptions:
+autoplot(quinn_nb,which=1:6) # these graphs looks pretty ok, there's one observation with a high Cook's D but otherwise things look ok (with small datasets you'll almost always get outliers so sometimes unaviodable)
+```
+Then using simulated residuals
+```{r}
+# let's have a look at the DHARMa simulated residuals
+simulatedResiduals_nb <- simulateResiduals(quinn_nb,plot=TRUE)
+# here the QQ normal plot looks much better than the Poisson & no evidence of overdispersion or outliers based on the tests they run - but still highlighting one value as a red star (probably observation 34) but not considered evidence of zero-inflation - this model is absorbing the excessive zeros 
+```
+Double check for overdispersion & lack of fit
+```{r lack of fit, overdispersion}
+# no evidence of a lack of fit & no overdispersion so this model is better than Poisson (let's just double check this for demonstration purposes)
+
+1-pchisq(quinn_nb$deviance,quinn_nb$df.residual) # no evidence of lack of fit
+
+quinn_nb$deviance/quinn_nb$df.residual # no overdispersion
+```
+Plot effects model of negative model
+```{r plot effects model}
+plot(allEffects(quinn_nb),multiline=TRUE,ci.style='bar') # multiline means put multiple lines on the 1 graph, and ci.style means put error bars on # NB this is plotted on a log scale
+
+# this plot would also be called an interactions plot - implies we have some idea we know what happens between seasons but that is not true - the lines aren't really appropriate here but they can be useful because if the lines are parallel it usually implies no interaction, if they aren't parallel there is an interaction
+
+# so here it looks like there's an effect of density but depends on the season - so that means there is an interaction between density & season
+```
+need to be careful with interpreting interactions appropriately depending on the scale
+```{r plot effects model on log scale}
+plot(allEffects(quinn_nb),multiline=TRUE,ci.style='bar',type='link')
+```
+# Summary of model
+```{r summary working on the link scale (log scale)}
+summary(quinn_nb)
+
+# the intercept here represents the AUTUMN high just because it's in alphabetical order
+# if the intercept is estimated poorly then everything will be out, because everything is compared to the intercept
+# if one of your categories has lower replication than the others then don't let it be the first category - otherwise it will skew all the other estimates of the other categories 
+
+# when you have interactions, first thing is to look at interaction terms (but need to interpet other factors in order to do this) - in the presence of interactions you can't make wild statements about the other factors - to interpret interactions need to interpret the other bits first
+
+# how to interpert interaction terms: we expect gap between low & high density will be same in all seasons, BUT for example here, the low density value in summer is 0.7 units below the low density value in autumn - so in this example it is summer where the gap in high & low density is significant 
+
+```
+
+```{r working on scale of the model - response scale - back transform}
+tidy(quinn_nb,conf.int=TRUE,exponentiate=TRUE) # here the numbers are density low is .92 x 19.67 (NOT .92 less then 19.67) 
+
+# here we can say 145% increase in low density in summer compared to low density in autumn (or 1/2.45 = 0.4 = 40% less in autumn than summer)
+```
+Pair-wise comparison to determine magnitude of effect
+```{r}
+emmeans(quinn_nb,pairwise~DENSITY|SEASON,type='response') # this enables us to compare density in each seasons & comparisons are going to made on the 'repsonse' scale i.e. natutral scale (NOT the 'link' scale i.e. log scale)
+
+# how to interpret these results:
+# in autumn there is no evidence of an effect of density, same with spring (because of their ratios & p values0)
+# in summer there is evidence of an effect of density because the high density populations are 120% higher than in low density (ratio = 2.189)
+
+# NB the effect sizes are on the repsonse scale but the p value & z value are performed on log scale
+```
+Now let's plot:
 # Predictions
-
-
+```{r}
+quinn_nb_new <- emmeans(quinn_nb, ~DENSITY|SEASON,type='response') %>% as.data.frame()
+head(quinn_nb_new)
+```
 # Summary figures
-
-
-
-
-
+```{r}
+ggplot(quinn_nb_new,aes(x=SEASON,y=response,fill=DENSITY))+
+  geom_pointrange(aes(ymin=asymp.LCL,ymax=asymp.UCL),shape=21,position=position_dodge(width=0.2))+
+  theme_classic()+annotate(geom='text',x=3,y=68,label='*',size=7) # dodge nudges points to the side so they don't sit on top of each other, annotate adds that little star that we want to indicate signficance - annotate will let you add any sort of arbitrary stuff to the graph
+```
 
 # References
