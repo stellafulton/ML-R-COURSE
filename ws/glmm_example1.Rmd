@@ -64,6 +64,8 @@ library(tidyverse) #for data wrangling
 library(nlme)
 library(lme4)      #for lmer
 library(lmerTest)  #for satterthwaite p-values with lmer
+library(DHARMa)
+library(glmmTMB)
 #library(pbkrtest)  #for kenward-roger p-values with lmer
 ```
 
@@ -99,10 +101,37 @@ LEAF   TREAT    NUMBER
 ```{r readData, results='markdown', eval=TRUE}
 tobacco = read_csv('../data/tobacco.csv', trim_ws=TRUE)
 glimpse(tobacco)
+
+# this is a hierarchical  model
+# each leaf (BLOCK) has the 2 different treatments (TREATMENT) applied randomly (to minimise systematic bias)
+
+# NB remember good idea to declare categorical data:
+tobacco <- mutate(tobacco,TREATMENT=factor(TREATMENT),LEAF=factor(LEAF)) # great! now all our categorical variables are factors (as opposed to characters)
 ```
 
-
 # Exploratory data analysis
+
+```{r boxplot}
+# if this was jut a simple t-test we'd do a box plot - easy! let's a have a quick look why not!:
+ggplot(tobacco,aes(y=NUMBER,x=TREATMENT)) +
+  geom_boxplot()
+
+# based on this, the data looks approximately normal, so Gaussian distribution might be appropriate, a Gamma (can't have zeros though remember) would be ok as well - these are our 2 obvious candidates
+
+# so let's go ahead with a Gaussian as a linear mixed effects model
+
+# get a feel for the data & what you might expect
+ggplot(tobacco,aes(y=NUMBER,x=as.numeric(LEAF))) +
+  geom_line(aes(linetype=TREATMENT))
+
+```
+3 packages for linear mixed effects models:
+
+package -> function
+
+nlme  -> lme (assumes Gaussian - can't do generalised mixed effects) - the old model
+lme4 -> lmer, glmer (newer model - some models that these won't fit, but can deal with generalised linear models, doesn't give p values)
+glmmTMB -> glmmTMB (mixed effects & generalised mixed effects models - this one has the broadest scope)
 
 Model formula:
 $$
@@ -115,6 +144,10 @@ and $\bf{X}$ is the  model matrix representing the overall intercept and effects
 $\bf{Z}$ represents a cell means model matrix for the random intercepts associated with leaves.
 
 # Fit the model (lme)
+```{r}
+tobbaco_glmmTMB <- glmmTMB(NUMBER~TREATMENT+(1|LEAF),data=tobacco,REML=TRUE)
+```
+
 # Model validation (lme)
 # Model investigation / hypothesis testing
 # Predictions
