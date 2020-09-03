@@ -143,19 +143,70 @@ where $\boldsymbol{\beta}$ and $\boldsymbol{\gamma}$ are vectors of the fixed an
 and $\bf{X}$ is the  model matrix representing the overall intercept and effects of the treatment on the number of lesions.
 $\bf{Z}$ represents a cell means model matrix for the random intercepts associated with leaves.
 
-# Fit the model (lme)
-```{r}
-tobbaco_glmmTMB <- glmmTMB(NUMBER~TREATMENT+(1|LEAF),data=tobacco,REML=TRUE)
+# Fit the model
+```{r fit model}
+library(lme4)
+#tobbaco_glmmTMB <- glmmTMB(NUMBER~TREATMENT+(1|LEAF),data=tobacco,REML=TRUE) # this isn't working..
+tobbaco_lmer <- lmer(NUMBER~TREATMENT+(1|LEAF),data=tobacco,REML=TRUE) # use this for now
+# repsonse is number, the predictor is treatment, the (1|LEAF) are the random effects - put them in the +() bit - the | means conditional on, 1 refers to the intercept: this is saying is the intercept should be conditional on the leaf - each leaf has its own intercept - it's like saying the baseline differs for each leaf & it also recognises that it's a random effect so it doesn't provide estimates it will just tell you the variance in the intercepts - it will also come up with an average effect across all leaves 
+
+# so for me it would give average effect of macoralgal removal treatment across all plots 
+
+# can have random intercept, or random intercept & slope (do this is you have all the raw data, i.e. you didn't average the pseudoreplicates first)
+
+# REML - using maximum likelihood- but it's known to be biased, so we use restricted maximum likelihood which isn't as biased a.k.a residual maximum likelihood- it's maximising the likelihood of the residuals rather than the observations
+
+# NB: want model to run with REML because it's less biased BUT if you want to compare 2 models that are different only in their fixed structure (so what fixed factors they include) you can only do so if you're using maximum likelihood NOT restricted maximum likelihood
 ```
 
-# Model validation (lme)
+# Model validation 
+```{r validate model, warning=FALSE, message=FALSE}
+plot_grid(plot_model(tobbaco_lmer, type='diag')[-2])
+
+# the second plot it would normally produce is misformed & makes the whole thing fail, so the [-2] says don't plot the second plot, otherwise the whole this will fail
+
+# our graphs tell us this:
+# A: QQ normal plot - looks good, roughly a straight line
+# B: density plot of the residuals - yep looks pretty normally distributed
+# C: residual plot - looks pretty ok - random scatter
+
+# this is great!
+
+# we don't look at things like overdispersion because we're assuming Gaussian distribution which assumes mean & variance are equal so the variance is set, it is not estimated, so there can't be overdispersion
+
+# can't have autocorrelation when you only have 2 levels of a factor - need to have at least 3 things, or really 5
+```
+
 # Model investigation / hypothesis testing
-# Predictions
+```{r}
+summary(tobbaco_lmer)
 
-# Summary figures
+# what do we get from this?
 
-# Fit the model (lmer)
+# Random effects:
+# partitioning variance of effects into different parts of the hierarchy i.e. what was the variance b/w the baselines/intercepts for each leaf? 13.63 units of variance - dependent on scale of data - but when you compare to residuals you can see there's as much noise between leaves as there is between treatments within the leaves - indicates scale of variability
 
-# Fit the model (glmmTMB)
+# Fixed factors:
+# intercept represents average of the first group (STRONG)
+# then the WEAK group have on average 7.9 fewer lesions and that difference is significant
+
+```
+
+```{r tidy summary}
+tidy(tobbaco_lmer,conf.int=TRUE) # & can pipe to kable for a neat output
+```
+# Strength of relationship
+```{r r squared value}
+library(MuMIn)
+r.squaredGLMM(tobbaco_lmer)
+# R2c is the conditional r squared - fixed & random together - the model as a whole explains about 68% of the variability
+# the strength of mixed effects is R2m
+```
+
+# Predictions & Summary figures
+```{r use emmeans to create predictions plot}
+emmeans(tobbaco_lmer, ~TREATMENT) %>% as.data.frame() %>% ggplot() + 
+geom_pointrange(aes(y=emmean,x=TREATMENT,ymin=lower.CL,ymax=upper.CL))
+```
 
 # References

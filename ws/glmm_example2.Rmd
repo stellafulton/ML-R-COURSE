@@ -115,6 +115,16 @@ FISHID   MASS    TRIAL             SMR\_contr   CHANGE
 ```{r readData, results='markdown', eval=TRUE}
 norin = read_csv('../data/norin.csv', trim_ws=TRUE)
 glimpse(norin)
+norin <- mutate(norin,TRIAL=factor(TRIAL), FISHID=factor(FISHID)) # declare categorical variables as factors # but also, should consider random effects as factors also - so declare FISHID as a facotr
+
+# wanted to control for change in body mass - that wasn't incorporated into metabolic rate they were expressing 
+
+# blocking design - each combination was measured for each fish - fishID will be the block, within the block we have the treatment
+
+# trial is a fixed effect, fishid is a random effect
+
+# the main thing we're interested in is treatment - it is categorical, so let's start with  a boxplot
+
 ```
 
 
@@ -130,13 +140,85 @@ where $\boldsymbol{\beta}$ and $\boldsymbol{\gamma}$ are vectors of the fixed an
 and $\bf{X}$ is the  model matrix representing the overall intercept and effects of temperature and (centered) mean fish size on SDA peak.
 $\bf{Z}$ represents a cell means model matrix for the random intercepts associated with individual fish.
 
+```{r boxplot}
+# the fixed effect (independent variable) is categorical so let's start with a boxplot
+
+ggplot(norin,aes(x=TRIAL,y=CHANGE))+geom_boxplot() # change is our response variable
+
+```
+
+```{r scatter plot}
+ggplot(norin,aes(x=SMR_contr,y=CHANGE,shape=TRIAL,colour=TRIAL))+geom_smooth(method='lm')+geom_point()
+
+# the amount that they change does depend on their metabolic rate perhaps more so fro the high temp group
+
+# there could be an interaction here
+
+# a graph like this does not take into account blocking, doesn't take into account lack of independence, nor does it standaradise for the mass, so just looking at this graph won't give full story
+```
+
 # Fit the model
+```{r fit model}
+# interaction between trial & metabolic rate might be occurring, so let's fit a model that can include an interaction
 
+# MULITPLICATIVE MODEL (with interaction)
+norin_lmer <- lmer(CHANGE~TRIAL*SMR_contr+MASS+(1|FISHID),data=norin,REML=FALSE)
 
+# here we have the interaction b/w TRIAL & metabolic rate, then we're also including an additve effect for mass as a way of standardising for mass (but won't pay any attention to it in the output because we know it will create noise), and then we have the random effect (1|FISHID) - every fish has it's own baseline
 
+# NB: you really can't use continuous data as a random effect
+
+# can compare with a model that doesn't have the interaction to determine if the interaction is necessary or not
+
+# another option to account for mass (offset):
+norin_lmer1 <- lmer(CHANGE~TRIAL*SMR_contr+offset(MASS)+(1|FISHID),data=norin,REML=FALSE)
+# if you assume there is a 1:1 relationship b/w mass and the metabolic rate, then use offset and you don't lose a degree of freedom but you have to know the relationship b/w mass & the response variable - so that can be a bit tricky
+# offset assumes effect of mass is 1:1, it doesn't estimate the effect of mass
+
+# now  I want to compare the model with the interaction (multiplicative) & the model without the interaction (additive)
+# ADDITIVE MODEL (no interaction)
+norin_lmer2 <- lmer(CHANGE~TRIAL+SMR_contr+MASS+(1|FISHID),data=norin,REML=FALSE)
+
+# MULTIPLICATIVE MODEL (interaction) without mass 
+norin_lmer3 <- lmer(CHANGE~TRIAL*SMR_contr+(1|FISHID),data=norin,REML=FALSE)
+
+```
+# Compare multiplicative vs. additive models with & without mass
+```{r AIC values}
+AICc(norin_lmer,norin_lmer1,norin_lmer2,norin_lmer3)
+# the one with the offset uses fewer degrees of freedom, so it is less complex, BUT the model that had to estimate the effect of mass did turn out to be the better model
+
+# had to set REML to FALSE beacuse we were comparing fixed effects
+
+# this shows that actually we don't even need mass! the model without mass that includes the interaction has lowest AICc value
+```
+```{r select the best model}
+# ok, we've selected our best model - interaction with no mass, now let's update it with REML=TRUE
+norin_lmer3a <- update(norin_lmer3,REML=TRUE)
+
+# at the moment it is a random intercept model because each fish is its own control
+```
+
+```{r random intercept & slope model }
+norin_lmer3b <- update(norin_lmer3a,~TRIAL*SMR_contr+(SMR_contr|FISHID)) # different slope per fish # model failed to converge - won't work- this is too complex i.e. each fish has a different response to metabolic rate # different resposne for each trial for each different fish
+norin_lmer3c <- update(norin_lmer3a,~TRIAL*SMR_contr+(TRIAL|FISHID)) 
+# can compare AICc values of the random intercept & slope model to the jut random intercept model
+```
 # Model validation
+```{r}
+# using the model with no mass and and interaction 
+plot_model(norin_lmer3a, type='diag')[-2] %>% plot_grid
+# this all looks pretty good
+```
 
 # Model investigation / hypothesis testing
+```{r}
+summary(norin_lmer3a)
+
+# more variability between fish than within - so the blocks are working - think of it as more variability between plots rather than within
+
+# this shows us that blocking was a good idea - it improved the power of the test 
+```
 
 # Predictions
 
