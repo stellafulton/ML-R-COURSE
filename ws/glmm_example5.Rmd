@@ -72,6 +72,25 @@ Someone did something for some reason.....
 ```{r readData, results='markdown', eval=TRUE}
 owls = read_csv('../data/owls.csv', trim_ws=TRUE)
 glimpse(owls)
+# data is about squabbling owl chicks
+# want to know how the number of calls varies depending on if the owls were satiated or hungry
+# also interested in whether the gender of the parent returning had an effect on the calls
+# interested in whether the arrival time (relative to sunset) had an effect on the calls
+# the response is the number of calls made 
+# also number of calls might be related to the number of chicks in the nest - covariate to standardise for 
+
+# let's start off with a Poisson distribution because the response variable, number of calls is count data
+
+# re-used the same nest with the same chicks - so deprived & fed the same chicks etc. etc. so it was a hierarchical design - not independent
+
+# this is a blocking design with multiple treatments underneath (the block is the nest)
+
+owls <- mutate(owls, FoodTreatment=factor(FoodTreatment),SexParent=factor(SexParent),Nest=factor(Nest),NCalls=SiblingNegotiation)
+glimpse(owls)
+
+# because multiple fixed effects we might have interactions 
+
+# should start from nothing and then build
 ```
 
 
@@ -87,15 +106,209 @@ where $\boldsymbol{\beta}$ and $\boldsymbol{\gamma}$ are vectors of the fixed an
 and $\bf{X}$ is the model matrix representing the overall intercept and effects of food treatment, sex of parent, arrival time (and various interactions) on the number of sibling negotiations.
 Brood size was also incorporated as an offset.
 $\bf{Z}$ represents a cell means model matrix for the random intercepts associated with individual nests.
+```{r some exploratory graphs}
+owls %>% ggplot()+
+  geom_boxplot(aes(y=NCalls,x=Nest))+
+  facet_grid(SexParent~FoodTreatment)
+  
+ggplot(data=owls,aes(x=ArrivalTime,y=NCalls,colour=FoodTreatment))+
+  geom_point()+
+  geom_smooth(method='lm')+
+  facet_grid(~SexParent)
 
-# Fit the model
+ggplot(data=owls,aes(y=NCalls,x=BroodSize,colour=SexParent))+
+  geom_point()+
+  geom_smooth(method='lm')+
+  facet_grid(~FoodTreatment)
 
+# let's try a Poisson model, BUT what will our model structure be?? what should we include? interactions? if so, how many?
+# let's start simple & build up
+
+# need to make sure that the predictors in your model, range of data need to have overlap
+
+```
+# Fit the model i.e. fit a bunch of different models & decide which one is best based on AICc
+Model 1
+```{r fit model 1 FoodTreatment}
+# let's start with FoodTreatment as most important factor determining NCalls, have to have a random effect for nest because of blocking design
+
+owls_glmmTMB <- glmmTMB(NCalls~FoodTreatment+(1|Nest),data=owls,family=poisson(link='log'),REML=FALSE)
+# ok so here we have response NCalls, independent variable FoodTreatment, then random intercept for Nest (so each nest has baseline NCalls), assuming Poisson distirbution generated the NCalls data, and need the log link function 
+```
+Model 2
+```{r fit model 2 FoodTreatment x ArrivalTime}
+# food treatment & arrival time are important in determining NCalls
+
+# Multiplicative (interaction)
+owls_glmmTMB1 <- glmmTMB(NCalls~FoodTreatment*scale(ArrivalTime)+(1|Nest),data=owls,family=poisson(link='log'),REML=FALSE) # scale ArrivalTime because this might help computation 
+
+```
+Model 3
+```{r fit model 3 FoodTreatment + Arrival Time}
+# Additive
+owls_glmmTMB2 <- glmmTMB(NCalls~FoodTreatment+scale(ArrivalTime)+(1|Nest),data=owls,family=poisson(link='log'),REML=FALSE) # scale ArrivalTime because this might help computation 
+
+```
+Model 4
+```{r fit model 4 SexParent x FoodTreatment x Arrival Time}
+# most complex version incorporating sex of the parent as important predictor as well interacting with the other predictors
+owls_glmmTMB3 <- glmmTMB(NCalls~SexParent*FoodTreatment*scale(ArrivalTime)+(1|Nest),data=owls,family=poisson(link='log'),REML=FALSE)
+```
+
+Now compare the models using AICc values
+```{r AICc values}
+AICc(owls_glmmTMB,owls_glmmTMB1,owls_glmmTMB2,owls_glmmTMB3)
+# we see here they're all pretty similar 
+```
+What about if we standardise for the brood size?
+Model 5
+```{r fit model 5 FoodTreatment x ArrivalTime standardise for BroodSize}
+# remember we can do this using offset - have to keep 1:1 scale so need to log(BroodSize) because we're using Poisson distribution which is on a log scale
+owls_glmmTMB4 <- glmmTMB(NCalls~FoodTreatment+scale(ArrivalTime)+offset(log(BroodSize))+(1|Nest),data=owls,family=poisson(link='log'),REML=FALSE)
+```
+
+Check AICc values again
+```{r AICc values}
+AICc(owls_glmmTMB,owls_glmmTMB1,owls_glmmTMB2,owls_glmmTMB3,owls_glmmTMB4)
+# here we see the additive model with FoodTreatment & ArrivalTime accounting for BroodSize is the best option so let's go with that
+```
+Re-fit with REML so we have unbiased estimates
+```{r update selected model}
+owls_glmmTMB4a <- update(owls_glmmTMB4,REML=TRUE)
+```
+Let's try a model with a random intercept & slope
+```{r fit model 4b}
+owls_glmmTMB4b <- update(owls_glmmTMB4a,.~.-(1|Nest)+(scale(ArrivalTime)|Nest)) # .~. means keep everything the same, the - means take away the fixed effect that was there and + means replace it with this new one
+# now we have random intercept & slope associated with arrival time 
+```
+Check AICc again
+```{r AICc values}
+AICc(owls_glmmTMB4a,owls_glmmTMB4b) # ok, so the random intercept slope model was better than just random intercept
+```
+Let's try another random intercept & slope
+```{r fit model 4c}
+# let's try one more random slope
+owls_glmmTMB4c <- update(owls_glmmTMB4a,.~.-(1|Nest)+((FoodTreatment+scale(ArrivalTime)|Nest)))
+```
+Check AICc values again
+```{r}
+AICc(owls_glmmTMB4b,owls_glmmTMB4c) # ok so the model with FoodTreatment+ArrivalTime|Nest is better than ArrivalTime|Nest
+```
 
 # Model validation
+Now we have a good model (we think), we need to test for overdispersion & residuals etc.
+```{r validate model}
+simulatedResiduals <- simulateResiduals(owls_glmmTMB4c,plot=TRUE) 
+
+# eek there's a lot of red arrgghhh that's not a good sign! SO - it doesn't fit the nominated distribution very well - it's not fitting well at the small end  (more mass at the lower end than expected for a Poisson) - is it because of overdispersion? no it doesn't appear to be..., so what about zero inflation? - yep the red lines on the RHS graph indicate this
+
+# the RHS plot (residual plot) - wobbliness suggests wobbliness in residuals but not too concerning (it would if it was a quadratic curve for example - which would imply a linear model being fitted to nonlinear data) - here it's probably just noise in the residuals 
+
+# so let's test for zero inflatiion
+```
+Test for zero inflation (since the initial diagnostics don't indicate overdispersion)
+```{r zero inflation}
+testZeroInflation(owls_glmmTMB4c)
+# histogram represents simulated distribution of how many zeros you expect to get - our model represented by the red line is wayyyy outside the range of simulated values so there are excessive zeros in our dataset
+
+# so let's fit a zero inflated model and see if that absorbs the excessive zeros - negative Binomial
+```
+Double check overdispersion just to demonstrate what the initial diagnostics indicated
+```{r overdispersion test}
+testDispersion(owls_glmmTMB4c)
+```
+Test for autocorrelation
+```{r autocorrelation test}
+# when you measure things in time & space, you can't randomise these things! so the observations in arrival time are not independent (things that are close together in time are likely to be correlated)
+# take residuals & correlate residuals from time point 1 and the residuals for time point 2 and so on so forth
+testTemporalAutocorrelation(owls_glmmTMB4c)
+# you'll always get 100% correlation when you look for correlation between the same thing
+# assumes data is in temporal order!!! - so have to make sure the data is in temporal order
+
+# autocorrelation causes the analyses to underestimate the standard errors - things will seem significant that perhaps aren't - won't impact estimates much BUT it will narrow your confidence intervals - DANGEROUS
+
+# if there is evidence of spatial or temporal autocorrelation you need to account for it
+# lmer can't do anything about this
+# glmmTMB can! hooray! can deal with autocorrelated data
+
+# to account for this use first order autocorrelation for temporal autocorrelation (there are other ways to do this, but this is a good option) - space is slightly more difficult to deal becuase multi-dimensional
+# rather than assume indpendence of observations (off-diagonals are zeros), it allows some level of baseline correlation (p^1, p^2, p^3 on the off-diagonals - first order autocorrelation)
+
+# if you have data collected over time then need to check for this
+```
+Account for autocorrelation
+Fit another model
+```{r fit model to account for autocorrelation}
+owls_glmmTMB5 <- update(owls_glmmTMB4c,ziformula=~1)
+# take our best model 4c, and add zero inflation to it - the formula for this ~1 (intercept)
+
+# so a zero inflated model 
+# we are assuming that rather than 1 process generating our data, there is more than just Poisson distribution generating the NCalls - maybe the zeros recorded were not all true zeros - so our data was generated by whether you could hear the sounds or not (Binomial process) & then another governing the actual NCalls (Poisson)
+# I don't care why I wasn't able to detect, just account for the fact that I couldn't (Binomial dsitribution 0 or 1)
+summary(owls_glmmTMB5)
+
+# RESULTS:
+
+# Zero-inflation model:
+#            Estimate Std. Error z value Pr(>|z|)    
+# (Intercept)  -1.3705     0.1146  -11.96   <2e-16 ***
+
+# the significance indicates there is significance in the Binomial model (log odds scale) - so the odds of whether you detected a call are exp(-1.37)=0.254 - of the zeros that we counted, 4 times more of them are considered false zeros than true
+```
+Fit another model!
+```{r fit another model to account for autocorrelation}
+# why don't we see if our ability to detect a zero is influenced by ArrivalTime? (rather than just knowing whether or not you can detect or not)
+owls_glmmTMB6 <- update(owls_glmmTMB5,ziformula=~scale(ArrivalTime))
+```
 
 # Model investigation / hypothesis testing
+```{r interpretation of model results}
+summary(owls_glmmTMB6)
+
+# RESULTS indicates that yep arrivaltime does seem to have a significant effect on ability to detect a zero
+
+# (Intercept)        -1.39023    0.09313 -14.927  < 2e-16 ***
+# scale(ArrivalTime)  0.30317    0.09951   3.046  0.00232 ** 
+
+# now that we've accounted for zero inflation, let's 
+# Conditional model:
+#                      Estimate Std. Error z value Pr(>|z|)    
+# (Intercept)            0.75177    0.07164   10.49  < 2e-16 ***
+# FoodTreatmentSatiated -0.75562    0.27481   -2.75  0.00597 ** 
+# scale(ArrivalTime)    -0.16517    0.05066   -3.26  0.00111 ** 
+
+# CONCLUSIONS YOU WOULD MAKE:
+# exp(0.7517)=2.12 represents (intercept for Arrival Time (x variable), y variable is NCalls) the y intercept - the value of y when x equals 0 for the deprived group - remember we scaled arrival time - so 2.12 is the average number of calls per chick (because we standardised for brood size) for the deprived group at the average arrival time
+
+# the -0.75562 for foodtreatmentsatiated means exp(0.75155-0.75562)=0.99 satiated group only has 1 call per chick - 54% decline - and this is constant no matter what the arrival time is because remember we decided to pick the model without the interaction (so the slope for satiated & hungry are the same)
+
+# the -0.165 for scale(ArrivalTime) means exp(-0.16517)=0.8478 for every 1 unit change in scaled arrival time, the number of calls declines by 16%
+```
+# Strentgh of relationship
+```{r r squared}
+r.squaredGLMM(owls_glmmTMB6) # oh dear.....glmmTMB generated model cannot yet be put into the r.squaredGLMM function
+```
 
 # Predictions
+```{r using our good friend emmeans}
+owls_grid <- with(owls,list(FoodTreatment=levels(FoodTreatment),ArrivalTime=modelr::seq_range(ArrivalTime,n=100),SexParent=levels(SexParent))) # won't actually use SexParent info cos we didn't put that in the model
+# 'with' means every time you refer to a variable you don't need to specify where the variables came from
+
+owls_glmmTMB6_new <- emmeans(owls_glmmTMB6,~ArrivalTime|FoodTreatment,at=owls_grid,type='response') %>% 
+  as.data.frame()
+# emmeans puts everything back onto the original scale (no manual back transformation of predictor variables required)
+
+ggplot(owls_glmmTMB6_new,aes(x=ArrivalTime,y=rate))+
+  geom_line(aes(colour=FoodTreatment))+
+  geom_ribbon(aes(ymin=lower.CL,ymax=upper.CL,fill=FoodTreatment),alpha=0.2)
+
+# this graph shows us that rate of calling declines with arrivaltime
+# if you put raw data on this plot, it won't match because it hasn't accounted for brood size covariate or the blocks, or the zero inflation
+
+# if you ask the model to predict for your actual data  (essentially predicting the expected data) & plot residuals on this graph but this is hard to explain so you generally don't put raw data points on this sort of plot
+
+```
+
 
 # Summary figures
 
