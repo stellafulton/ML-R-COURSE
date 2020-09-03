@@ -52,6 +52,7 @@ Load the necessary libraries
 ```{r libraries, results='markdown', eval=TRUE, message=FALSE, warning=FALSE}
 library(car)       #for regression diagnostics
 library(broom)     #for tidy output
+library(broom.mixed)
 library(ggfortify) #for model diagnostics
 library(sjPlot)    #for outputs
 library(knitr)     #for kable
@@ -60,6 +61,7 @@ library(emmeans)   #for estimating marginal means
 library(MASS)      #for glm.nb
 library(MuMIn)     #for AICc
 library(tidyverse) #for data wrangling
+library(glmmTMB)
 ```
 
 # Scenario
@@ -71,6 +73,26 @@ Someone did something for some reason.....
 ```{r readData, results='markdown', eval=TRUE}
 mckeon = read_csv('../data/mckeon.csv', trim_ws=TRUE)
 glimpse(mckeon)
+
+# data is about predation on corals
+# treatment (thing they want to look at) is whether having a symbiont (e.g. crab or shrimp) can actually reduce predation
+# so in a tank they either had a predator and, a crab, a shrimp, a crab & shrimp, or nothing
+# wanted to record whether colony experienced any predation or not: 1 = predation, 0 = no predation
+# measure each of those treatments on each coral colony
+
+# BLOCKS are the tanks
+# TREATMENT is the symbiont i.e. crab, shrimp, both, nothing
+# ok so since each of the treatments are applied to each block so this is a randomised complete/block
+
+
+# RESPONSE is predation or not 1,0
+
+# first convert BLOCK & SYMBIONT to factors
+mckeon <- mutate(mckeon,SYMBIONT=factor(SYMBIONT),BLOCK=factor(BLOCK))
+
+# now, 'both' is the first group here, but more sensible to make 'none' the first group, so need to change order of the levels:
+mckeon <- mckeon %>% mutate(mckeon,SYMBIONT=factor(SYMBIONT,levels=c('none','crabs','shrimp','both')),BLOCK=factor(BLOCK))
+  
 ```
 
 
@@ -86,12 +108,109 @@ where $\boldsymbol{\beta}$ and $\boldsymbol{\gamma}$ are vectors of the fixed an
 and $\bf{X}$ is the model matrix representing the overall intercept and effects of symbionts on the probability of the colony experiencing predation.
 $\bf{Z}$ represents a cell means model matrix for the random intercepts associated with individual coral colonies.
 
-# Fit the model
+```{r intial plot}
+# let's plot this separately for each block
+# treatment is categorical
+# response variable is binary 0 or 1
 
+mckeon %>% ggplot(aes(x=SYMBIONT,y=PREDATION))+
+  geom_point(position=position_jitter(width=0.2, height=0))+
+  facet_wrap(~BLOCK)
+
+# you can see from these graphs, the likelihood of being predated is pretty high if no symbiont
+# we also might expect that the corals respond differently - so worth looking at random intercept & slopes
+
+# we know we're going to use a Binomial distribution because we've only got 0s & 1s
+```
+
+
+# Fit the model
+```{r fit some models, see which one works best}
+# fit random intercept model
+mckeon_glmmTMB <- glmmTMB(PREDATION~SYMBIONT+(1|BLOCK),data=mckeon,family=binomial(link='logit'),REML=FALSE)
+
+# fit random intercept slope model
+mckeon_glmmTMB1 <- glmmTMB(PREDATION~SYMBIONT+(SYMBIONT|BLOCK),data=mckeon,family=binomial(link='logit'),REML=FALSE) # model didn't converge so can't use this
+
+# only 1 mixed effect so don't need to worry about interactions
+
+# ok so now we know we're going to go ahead with the first model, random intercept only, so just update it has REML=TRUE
+mckeon_glmmTMB <- update(mckeon_glmmTMB,REML=TRUE) # this is our model we will use
+```
 
 # Model validation
+```{r validate model}
+# look at diagnostic plots
+plot_model(mckeon_glmmTMB,type='diag')
+
+# Binomial residuals are really hard to interpret, so the plot_model  only gives 1 plot (i.e. doesn't give residuals plot) - jsut gives QQ normal plot 
+
+# so this QQ normal plot doesn't look too bad
+```
+```{r}
+# BUT we can use DHARMa to deal with tricky residuals!!!
+install.packages('DHARMa')
+library(DHARMa)
+simulatedResiduals <- simulateResiduals(mckeon_glmmTMB,plot=TRUE)
+
+# looks pretty good - simulated residuals given as box plot because categorical 
+```
 
 # Model investigation / hypothesis testing
+```{r}
+summary(mckeon_glmmTMB)
+
+# NB remember the link function we used - means these results are on a log odds scale!
+
+# probability of being predated in the no symbiont groups is 83 times higher than the probability of not being predated on (because exp(4.42)=83.096)
+
+# the odds of being predated on for crabs are only 4% of 83 because (exp(-3.32)=0.036) - so odds of being predated have declined by 96% - so 3 times as likely to be predated, rather than 83 times as likely
+
+# for the group that has both symbionts, exp(4.42-5.152)=0.48 are the odds of being predated on - less likely to be predated on
+
+# both symbionts exp(-5.15)=0.0058 
+
+tidy(mckeon_glmmTMB,effect='fixed',conf.int=TRUE,exponentiate=TRUE)
+
+# what about if we wanted to know for example...the difference b/w having a crab and having a crab & a shrimp? i.e. different comparisons - well we do a Tukey's test, OR we make our own comparisons
+```
+```{r contrast matrix to make other comparisons}
+# so what about defining our own comparisons?? Let's say we're interested in this:
+
+          # Crab vs. Shrimp             1 vs. 2 symbionts                   None vs. symbionts
+# None           0                               0                               1
+# Crab           1                              -1/2                            -1/3
+# Shrimp        -1                              -1/2                            -1/3
+# Both           0                               1                              -1/3
+
+(cmat=cbind(crab_vs_shrimp=c(0,1,-1,0),one_vs_both=c(0,-1/2,-1/2,1),symbiont=c(1,-1/3,-1/3,-1/3)))
+
+# important that the positives only sum to 1 and the negatives only sum to 1 otherwise you end up with effect size bigger than they really are
+
+# ok now we have to make sure the contrast matrix meets the conditions of indpendence & the p-1 rule (so we had 4 groups, so can only do 3 comparisons)
+crossprod(cmat) # the off diagonals are all zero so yep all the comparisons are independent, and there's only 3 comparisons so we're good to go!
+```
+
+```{r comparisons}
+emmeans(mckeon_glmmTMB,~SYMBIONT,contr=list(SYMBIONT=cmat),type='response') # so here we're making our own contrasts rather than doing a Tukey's test, and we're asking for the on the response scale
+
+# let's look at the contrasts - NB we're comparing odds:
+# crab vs. shrimp - odds of being predated by crabs are nearly 90% higher than they are for shrimp (this is coming from the 1.89
+# odds of being predated on if 1 symbiont is present 0.22, so likelihood of being predated on with 1 compared to having both is 4.5 times more likely 1/0.22=4.5
+# if symbiont present vs. none odds are 62 - this is significant
+```
+# Strength of relationship
+```{r r squared}
+r.squaredGLMM(mckeon_glmmTMB) # the delta version is just the updated method of calculating r squared values
+# so explaining about 14.5% of the variability when we don't account for the treatment (i.e. the different tanks) - when we put the blocking in, we can explain around 84% of the variability
+```
+
+```{r summary plot}
+emmeans(mckeon_glmmTMB,~SYMBIONT,type='response') %>% 
+  as.data.frame() %>% 
+  ggplot(aes(x=SYMBIONT,y=prob))+
+  geom_pointrange(aes(ymin=lower.CL,ymax=upper.CL))
+```
 
 # Predictions
 
