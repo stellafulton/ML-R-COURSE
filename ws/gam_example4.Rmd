@@ -60,6 +60,8 @@ library(mapdata)
 library(maps)
 library(tidyverse) #for data wrangling
 library(DHARMa)    #for residual diagnostics
+library(sf)
+library(stars)
 ```
  
 # Scenario
@@ -92,6 +94,8 @@ C3    LAT       LONG       MAP           MAT    JJAMAP    DJFMAP
 ```{r readData, results='markdown', eval=TRUE}
 paruelo = read_csv('../data/paruelo.csv', trim_ws=TRUE)
 glimpse(paruelo)
+dim(paruelo)
+# North American grass data - recorded LAT & LONG, and other stuff like some climate variables, percent cover 
 ```
  
 # Exploratory data analysis
@@ -106,26 +110,124 @@ $$
 
 where $\beta_0$ is the y-intercept. $f(Lat)$ and $f(Long)$ indicate the additive smoothing functions of the spatial predictors. 
 
+```{r exploratory bubble plot}
+ggplot(paruelo,aes(x=LONG,y=LAT))+
+  geom_point(aes(colour=C3,size=C3))+
+  scale_color_gradientn(colors=heat.colors(10)) # spatial plot
+```
 
+```{r mutate data so we can use Beta distribution}
+# for percent cover data: Binomial (technically this is supposed to be presence, absence - binary data) but doesn't really fit a Binomial distribution (shouldn't be used for percent cover), so the alternative is a Beta (uses same link function as a Binomial) - can't have zeros in a Beta, or ones - so have to truncate slightly so your 0 values are 0.0001, and your 1 values are 0.9999
 
+# mutate data so the 0s are 0.001 and longitude is negative so that when we plot it will be in the right place
+paruelo <- paruelo %>% 
+  mutate(mC3=ifelse(C3==0,0.001,C3), 
+         LONG=-1*LONG)
 
+# ifelse means if C3 equals 0, change to 0.001, otherwise/else leave it is the origincal C3 value
+```
 
 # Fit the model {.tabset .tabset-faded}
-
 ## s(LONG,LAT)
+```{r fit 2D spline in a GAM model}
+#2D spline - fitting a surface, not a line
+paruelo.gam1 <- gam(mC3~s(LONG,LAT),data=paruelo,family=betar,method='REML') # using Beta distribution - it's just named betar
+```
 
+# Validate model
+```{r test if it's wiggly enough}
+k.check(paruelo.gam1) # yep all good
+```
+```{r check diagnostic plots}
+appraise(paruelo.gam1)
+# QQ normal looks BAD
+# residuals look ok
+```
+```{r visualise}
+draw(paruelo.gam1)
+```
+```{r let's make a quick map - predictions}
+# first make predictions 
+paruelo.list <- with(paruelo,
+                     list(LAT=seq(min(LAT),max(LAT),len=100),LONG=seq(min(LONG),max(LONG),len=100)))
+paruelo.new <- emmeans(paruelo.gam1,~LONG+LAT,at=paruelo.list,type='response') %>% as.data.frame()
+head(paruelo.new)
+```
+```{r quick map - create plot}
+ggplot(paruelo.new,aes(x=LONG,y=LAT))+
+  geom_tile(aes(fill=response))+
+  geom_contour(aes(z=response))+
+  scale_fill_gradientn(colors=heat.colors(10))+
+  geom_point(data=paruelo,aes(fill=C3),shape=21,size=5)
+```
+## Summary
+```{r}
+summary(paruelo.gam1) # this just shows us that it's wobbly - doesn't tell you how much wobbliness is in LAT & how much in LONG - we can fit a different model that does do this
+
+# assumes both continuous variables are on the same scale
+```
+# Fit some more models
 ## te(LONG,LAT) 
-
 ## ti(LONG,LAT)
+```{r}
+paruelo.gam2 <- gam(mC3~te(LONG,LAT),data=paruelo,family=betar,method='REML') # tensor product - allows LONG & LAT to be on different scales i.e. if you have LAT & temp you could use te - BUT you will still only get the one value for wobbliness
+paruelo.gam3 <- gam(mC3~ti(LONG)+ti(LAT)+ti(LONG,LAT),data=paruelo,family=betar,method='REML') # if you want to be able to break down the amount of wobbliness is due to LAT & LONG
+```
 
-#
+
+```{r}
+summary(paruelo.gam2)
+```
 
 
+```{r}
+summary(paruelo.gam3)
+```
 
-# Model validation
+## Now let's make some more fancy plots
+```{r plot a map}
+usa <- ne_countries(country='united states of america',scale="medium",returnclass="sf")
 
-# Model investigation / hypothesis testing
+ggplot()+
+  geom_sf(data=usa)
 
-# Predictions
+# now let's crop the USA map because we don't need alaska or hawaiii for example
+usa <- usa %>% st_crop(xmin=-130,xmax=-60,ymin=0,ymax=50)
 
-# Summary figures
+# can check the coordinate reference system if you need
+st_crs(usa)
+```
+
+```{r plot data on map}
+# now let's overlay our data onto our pretty map
+paruelo.sf <- paruelo %>% 
+  st_as_sf(coords=c("LONG","LAT"),crs=st_crs(usa))
+
+ggplot()+
+  geom_sf(data=usa)+
+  geom_sf(data=paruelo.sf,aes(color=C3,size=C3))+
+  scale_color_gradientn(colors=heat.colors(n=10))+
+  theme_bw()
+```
+
+```{r plot model on the map with our data}
+# now let's overlay our model - do this by creating a raster (instead of what we did before using emmeans etc. etc.)
+library(raster)
+library(ggspatial)
+
+paruelo.new.sf <- rasterFromXYZ(paruelo.new[,c("LONG","LAT","response")])%>%    #rasterFromXYZ can only take a matrix 
+  mask(usa) %>% 
+  st_as_stars() %>% 
+  st_set_crs(st_crs(usa))
+
+ggplot()+
+  geom_sf(data=usa)+
+  geom_stars(data=paruelo.new.sf)+
+  theme_bw()+
+  scale_fill_gradientn(colours=heat.colors(10),na.value=NA)+
+  geom_sf(data=paruelo.sf,aes(fill=C3),shape=21,size=4)+
+  annotation_scale(location="bl",width_hint=0.30)+
+  annotation_north_arrow(location="bl",which_north="true",pad_x=unit(0.1,"in"),pad_y=unit(0.3,"in"),style=north_arrow_nautical)
+
+# "bl" stands for bottom left
+```

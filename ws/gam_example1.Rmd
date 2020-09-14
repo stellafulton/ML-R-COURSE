@@ -45,12 +45,13 @@ bibliography: ../resources/references.bib
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+# WEEK 2 DAY 1: GAMS
 # Preparations
 
 Load the necessary libraries
 
 ```{r libraries, results='markdown', eval=TRUE, warning=TRUE, message=FALSE}
-library(mgcv)      #for GAMs
+library(mgcv)      #for GAMs 'multiple generalised cross validation'
 library(gratia)    #for GAM plots
 library(emmeans)   #for marginal means etc
 library(MuMIn)     #for model selection and AICc
@@ -84,6 +85,27 @@ x  y
 ```{r readData, results='markdown', eval=TRUE}
 data.gp = read_csv('../data/data.gp.csv', trim_ws=TRUE)
 glimpse(data.gp)
+
+ggplot(data.gp,aes(x=x,y=y))+   # let's just do a quick plot to confirm that this is NOT linear data
+  geom_point()+
+  geom_line()+
+  geom_smooth()
+
+ggplot(data.gp,aes(x=x,y=y))+   # let's smooth using a gam
+  geom_point()+
+  geom_smooth(method='gam',formula=y~s(x,k=3)) # 's' stands for spline, k tells how many knots
+# must stress this is JUST a visual - we haven't done any hypothesis testing or anything - this is not a substitute for properly fitting a model - we only do this as a 'first pass' 
+
+```
+```{r side note about polynomials}
+# to model a polynomial, let's explore
+data.gp.lm <- lm(y~poly(x,3),data=data.gp) # fits a polynomial to the data using poly function
+summary(data.gp.lm) # these terms do have interpretation - indicates significance of each component
+
+data.gp.lm1 <- lm(y~x+I(x^2)+I(x^3),data=data.gp) 
+summary(data.gp.lm1)         # no interpretation because terms are not independent of each other
+
+# both of these will give the same curve, BUT use 'poly' function to fit model (i.e. the first line of code)
 ```
 
 
@@ -100,20 +122,111 @@ where $\beta_0$ is the y-intercept, and $f(x)$ indicates an additive smoothing f
 
 
 # Fit the model
+```{r fail by design, eval=FALSE}
+data.gp.gam <- gam(y~s(x),data=data.gp) # THIS FAILED! BECAUSE....not enough data to fit with the number of knots the gam function wants to start with - by default it uses 12 knots - but we only had 5 observations - can't split that up 12 ways so the model failed - so we can specify the number of knots we want:
+```
 
+```{r specify knots}
+data.gp.gam <- gam(y~s(x,k=3),data=data.gp,method='REML') # here we specified the maximum number of knots we want the 'gam' function to use; method='REML' specifies how we're going to balance b/w over & under-fitting (can do via cross-validation or via REML) - almost ALWAYS REML is best for optimising the wiggliness, cross-validation tends to favour under-wiggly models - so use REML when optimising a gam
+```
 
+```{r visualise basis functions}
+basis(s(x,k=3),data=data.gp) %>% draw # this draws the basis functions for you 
+```
 
 
 # Model validation
+```{r check assumptions}
+# we assumed normality - need to assess this
+# homogeneity of variance - need to assess this => residual plot
+# BUT we did not assume linearity anymore because we are not fitting a linear model (that was last week)
 
+# there's a package that does all this for you
 
+gam.check(data.gp.gam,pch=19)
+# first plot: Q-Q normal plot
+# next plot: residual plot
+# next plot: histogram of residuals - should follow the nominated distribution, in this case - Gaussian - not a heap of value looking at this one - QQ normal plot tells you what you need to know
+# next plot: plotting observed data & fitted data -if a straight line then the model is doing a good job at reproducing your data
 
+# if we say the number of knots is 3, we can talk about the k' value = 3-1=2 i.e. number of knots expressed as degrees of freedom - if start with 3 knots, start with 2 degrees of freedom - then it tells you the optimum degrees of freedom (edf) = 1.95 - (degrees of freedom after penalising) - want edf (estimated degrees of freedom) to be quite a bit lower than k' - if close together then you may have overconstrained the model; want k-index to be >1
 
+# R Console output: what do all the values mean? - can just use k.check to get just the R Console output
+# want big difference b/w k' & edf
+# want k-index to be >1
+# and p to be >0.05 as per usual
+```
+```{r test assumptions using k.check & appraise}
+k.check(data.gp.gam) # check values
+appraise(data.gp.gam) # check graphs
+```
+```{r test assumption for multiple predictors}
+# if you have more than a single predictor .....
+# additional assumption: can't have correlated predictors - check with variance inflation - but this doesn't work for GAMS - so instead we look at concurvity
+concurvity(data.gp.gam) # you want the values to be close to zero
+```
+
+```{r visualise gam model that we just fitted using partial plot}
+draw(data.gp.gam,residuals=TRUE) # draw function comes from gratia package which plots stuff from gams
+
+# SIDE NOTE: if you fit models with more than one variable be careful with what 'observed' data you put on the graph
+```
 # Model investigation / hypothesis testing
+```{r}
+summary(data.gp.gam)
+# what values does summary give us?
 
+# the bigger the value of edf, the wigglier the line must be - hypothesis test associated with that because there's a p value - testing if it is significantly wiggly.....seeing whether the line it has produced differs from a straight horizontal line
+# provides estimates of the r-squared value: we want to focus on the deviance explained value - in this case our model is explaining 91.5% of our variability
 
-# Predictions
+# can calculate AIC & AICc values if you want to compare your gam model with another one
+AIC(data.gp.gam)
+AICc(data.gp.gam)
+```
 
-# Summary figures
+# Predictions & Summary figures
+```{r make some predictions}
+# first let's create some predictions using our model:
+data.gp.list <- with(data.gp,list(x=seq(min(x),max(x),len=100))) # produce a list with 100 possible x values
+data.gp.new <- emmeans(data.gp.gam,~x,at=data.gp.list) %>% 
+  as.data.frame() # use emmeans to do our predictions
+head(data.gp.new)
+```
+```{r plot predictions}
+# now plot our predicted values and also our original observations & our confidence ribbon
+ggplot(data.gp.new,aes(x=x,y=emmean))+
+  geom_ribbon(aes(ymin=lower.CL,ymax=upper.CL),fill='purple',alpha=0.35)+
+  geom_line()+
+  geom_point(data=data.gp,aes(x=x,y=y))+
+  theme_bw()
+```
+
+```{r a way to get your observed values back from your predicted values & the residuals}
+# this is how you plot your observed data if you have multiple predictors
+data.gp.new.partial <- data.gp %>%
+  mutate(Pred=predict(data.gp.gam,type='link'), # make some predictions # link makes sure that the predictions are on the link scale
+         Res=resid(data.gp.gam), # resid is a function for extracting residuals # residuals are always on a link scale
+         Resid=Pred+Res) # now add predicted values and residuals and you'll get your observed values # because we are adding them together they HAVE to be on the same scale
+
+data.gp.new.partial %>% head
+```
+
+```{r plot predictions but using the new way to plot observed data values}
+# now plot our predicted values and also our original observations & our confidence ribbon
+ggplot(data.gp.new,aes(x=x,y=emmean))+
+  geom_ribbon(aes(ymin=lower.CL,ymax=upper.CL),fill='pink',alpha=0.5)+
+  geom_line()+
+  geom_point(data=data.gp.new.partial,aes(x=x,y=y))+
+  theme_bw()
+```
+```{r have a look at the first order derivatives of our model}
+derivatives(data.gp.gam,order=1,type='central') %>% draw # derivatives function uses Newton's method to iteratively calculate derivatives 
+# this has calculated  first order derivatives for a bunch of points
+data.derivs <- derivatives(data.gp.gam,order=1,type='central') 
+# to locate the zero slope, just sort the derivative column
+data.derivs %>% arrange(abs(derivative)) %>% slice(1) # slice(1) means show me the first row, slice(1:3) means show me the first 3 rows
+# this shows us that the peak is at x=-1.487 (i.e. where the slope is closest to zero)
+# or you can calculate second order derivative to locate where the ROC is greatest
+```
 
 # References

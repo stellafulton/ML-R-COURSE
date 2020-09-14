@@ -92,6 +92,9 @@ Year Stilt.Oahu Stilt.Maui Coot.Oahu Coot.Maui Moorhen.Kauai Rainfall
 ```{r readData, results='markdown', eval=TRUE}
 reed = read_csv('../data/reed.csv', trim_ws=TRUE)
 glimpse(reed)
+# we're going to focus on the moorhen column
+# data are counts so we would naturally consider a Poisson distribution
+# we want to model relationship b/w moorhens & year
 ```
 
 # Exploratory data analysis
@@ -103,26 +106,158 @@ log(\lambda_i) =\beta_0 + f(Year_i) + f(Rainfall_i)
 $$
 
 where $\beta_0$ is the y-intercept. $f(Year)$ and $f(Rainfall)$ indicate the additive smoothing functions of Year and Rainfall respectively. 
+```{r exploratory scatter plot - moorhens as a function of year}
+# let's start with a scatter plot to visualise the data and see what sort of patterns are there
+ggplot(reed,aes(x=Year,y=Moorhen.Kauai))+
+  geom_point()+
+  geom_smooth()
+# ok so our data is clearly non-linear
 
+# if you wanted you could plot a gam poisson smoother but better to fit a model then plot
+# ggplot(reed,aes(x=Year,y=Moorhen.Kauai))+
+  geom_point()+
+  geom_smooth(method='gam',formula=y~s(x),method.args=list(family='poisson'))
+```
+```{r what about moorhens as a function of rainfall?}
+ggplot(reed,aes(x=Rainfall,y=Moorhen.Kauai))+
+  geom_point()+
+  geom_smooth()
+```
 
-# Fit the model
+# Fit a model - MODEL 0
+righto let's fit a model that fits two smoothers - one for rainfall & one for year - since we think both are important predictors
+```{r fit a gam model - fit MODEL 0}
+reed.gam <- gam(Moorhen.Kauai~s(Year,bs='cr')+s(Rainfall,bs='cr'),data=reed,family=poisson(link='log'),method='REML') # here we have specified what time of basis function to use when creating the splines - bs='cr' 
+```
 
+# Validate model - MODEL 0
+```{r check the assumptions - validate MODEL 0}
+k.check(reed.gam)
+# remember we want k' & edf to be very different from each other, and we want k-index >1 and p-value >0.05
+# p values are calculated by randomisation so each time they will be slightly different
+```
+```{r check diagnostic plots}
+appraise(reed.gam) # we've probably over-smoothed the model by looking at this
+# QQ plot - not looking great
+# residuals - they look ok, but not from the QQ normal perspective
+# histogram doesn't really tell us much
+# ok so this model isn't really working very well- we've over-smoothed - let's try something else that is more wiggly
+```
+# Fit another model - MODEL 1
+```{r let's try another model}
+reed.gam1 <- gam(Moorhen.Kauai~s(Year,k=20,bs='cr')+s(Rainfall,bs='cr'),data=reed,family=poisson(link='log'),method='REML') # let's specify more knots to make the model more wiggly
+```
 
+# Validate the new model - MODEL 1
+```{r check assumptions for our new model}
+k.check(reed.gam1)
+appraise(reed.gam1) # QQ normal plot has improved, residual plot looks ok 
+concurvity(reed.gam1) # when s(?) values get above 0.8 then that's bad (indicates a strong relationship between predictors - we don't want that) # the results from this look like it's ok to have year & rainfall as predictors in the same model
 
-# Model validation
+# now we should check for overdispersion
+```
+```{r check for overdispersion in the new model}
+reed.resid <- simulateResiduals(reed.gam1, plot=TRUE)
+# these graphs imply evidence of overdispersion of this model - can check the testDispersion plot to be sure
+# testDispersion(reed.resid) # red line is WAYYY outside what our simulated values are
 
+# ok so our model is overdispersed - why? could be zero inflation, clustering (Negative binomials are for this)
+# we suspect this model has a bit of both but we think a Negative Binomial will be good enough to deal with the overdispersion occurring here (you can test for zero inflation if you want):
+testZeroInflation(reed.resid) # yep, not zero inflation
+```
+```{r check for autocorrelation in the new model}
+# temporal autocorrelation - we should explore this - check to make sure patterns of residuals don't change over time - otherwise there is periodicity in the data 
 
+# when you have missing values...the model takes out missing values - only stores data values that are there - we need to account for this
+# so let's create a new variable to get rid of the missing values in the original dataset
+Year <- reed %>% filter(!is.na(Moorhen.Kauai)) %>% pull(Year)
+nrow(reed) # 48 rows in original data set
+length(Year) # but only 45 that we actually used, because 3 values were missing 
 
+# now test for autocorrelation
+testTemporalAutocorrelation(reed.resid,time=Year)
+# if you get values that go outside the blue dotted line on the ACF vs Lag plot then you probably have temporal autocorrelation
+# in this case, temporal autocorrelation isn't dramatically bad - autocorrelation models assumes a pattern of autocorrelation - doesn't really account for random pattern of correlation so would be difficult to address with an autocorrelation model - long story short, we're good to go ahead
+```
 
+# Fit another model - MODEL 2
+```{r MODEL 2 fitting}
+# now that we've tested for ovedispersion & autocorrelation, we've decided that fitting a Negative Binomial would be a better type of model to fit - let's try that
+reed.gam2 <- gam(Moorhen.Kauai~s(Year,k=20,bs='cr')+
+                   s(Rainfall,bs='cr'),
+                 data=reed,
+                 family=nb(link='log'),method='REML')
+(theta=reed.gam2$family$getTheta((TRUE))) # if we want to use simulated residuals we have to do this step
+# try again
+reed.gam2 <- gam(Moorhen.Kauai~s(Year,k=20,bs='cr')+
+                   s(Rainfall,bs='cr'),
+                 data=reed,
+                 family=negbin(link='log',theta=theta),method='REML') # this version of negative binomial you have to give it the theta value, it doesn't estimate it
+```
+# Validate the new model - MODEL 2
+```{r MODEL 2 validation - values}
+k.check(reed.gam2)
+# k' & edf are a long way apart - GOOD!, even though k-index is <1 & p-value <0.05 - if k' & edf are really far apart the other conditions are basically irrelevant
+```
+```{r MODEL 2 validation - plots}
+appraise(reed.gam2)
+# QQ normal plot drastically improved
+# residual plot & observed vs fitted both look ok
 
-# Model investigation / hypothesis testing
+reed.resid <- simulateResiduals(reed.gam2,plot=TRUE)
 
+# righto so this model looks good to go ahead with
+```
+```{r visualise model by drawing partial plots}
+draw(reed.gam2) # function 'draw' draws the partial plots for each predictor - NB still on a link scale
+# NB these graphs don't tell you the absolute value because depends on the other predictor - so these graphs are ALWAYS centered on zero
+```
+```{r summary for best model reed.gam2}
+summary(reed.gam2)
+# the intercept (parametric coefficient) doesn't really have an interprettation - helps you re-centre the y-axis for the partial plots
 
-
+# non-parametric terms
+# wiggly term for Year because p-value <0.05; not so for Rainfall (p-value >0.05)
+# so if rainfall wasn't wiggly you could leave it there because it's still soaking up some variability, but if it wasn't wiggly you could also just fit a linear model to it instead of a spline - let's do that
+```
+# Fit another model with a smoother for Year, but linear model for Rainfall
+```{r}
+reed.gam3 <- gam(Moorhen.Kauai~s(Year,k=20,bs='cr')+Rainfall,data=reed,family=negbin(link='log',theta=theta),method='REML')
+summary(reed.gam3) # this shows that there really isn't any trend with Rainfall - doesn't have a significant effect on Moorhen abundance, but still soaking up some variability 
+# r-squared = 80.7% variability explained 
+```
 
 # Predictions
+```{r make predictions using model & plot}
+reed.list <- with(reed,list(Year=seq(min(Year),max(Year,len=100)))) # make a list of possible x values
+
+reed.gam3.newdata <- emmeans(reed.gam3,~Year,at=reed.list,type='response') %>%  # create y values for those x values by using our model
+  as.data.frame()
+
+head(reed.gam3.newdata) # have a look at out modelled data so we know what to plot
+
+ggplot(reed.gam3.newdata,aes(x=Year,y=response))+              # plot model
+  geom_ribbon(aes(ymin=lower.CL,ymax=upper.CL),fill='orange',alpha=0.3)+
+  geom_line()+
+  theme_bw()
+
+```
 
 # Summary figures
+```{r}
+# now to put the observed data on the plot we need to do it by calculating the observed data from the residuals - this will standardise for rainfall - cannot plot raw data straight onto the graph: see here
 
+reed.presid <- with(reed.gam3$model,data.frame(Year=Year,Rainfall=mean(Rainfall))) %>% # remember model stores the data that it uses to create the model, so instead of looking for observed data in original dataset, I'm going to look for them in the 'model' data so that there's no missing values
+  mutate(Pred=predict(reed.gam3,newdata=.,type='link'), # when you use mutate you just use '.' to refer to the data set that was passed into mutate
+         Resid=reed.gam3$residuals, 
+         Presid=exp(Pred+Resid))
+
+ggplot(reed.gam3.newdata,aes(x=Year,y=response))+              # plot model & observed data points
+  geom_ribbon(aes(ymin=lower.CL,ymax=upper.CL),fill='green',alpha=0.3)+
+  geom_line()+
+  geom_point(data=reed.presid,aes(y=Presid))+
+  geom_point(data=reed,aes(y=Moorhen.Kauai,x=Year),colour='red')+
+  theme_bw()   # red dots are the observed values from the original dataset, black dots are the observed values calculated from adding the residuals & modelled data together 
+```
 
 # References 
