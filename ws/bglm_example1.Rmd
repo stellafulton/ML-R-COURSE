@@ -110,28 +110,194 @@ OR\\
 \sigma &\sim{} \mathcal{Exp}(1)\\
 \end{align}
 $$
+observations follow a normal distribution
+mean can be modelled according to the linear predictor (i.e. intercept & slope)
+parameter beta0 follows prior normal distribution with mean 0 std dev 100
+parameter beta1 follows prior normal distribution with mean 0 std dev 10
+
+* typically use weakly informative priors (i.e. they define a reasonable domain) so that the priors don't impact on our estimate
+
+standard deviation (must be >0) could follow a cauchy or exp prior distribution
 
 # Fit the model
 
+```{r fit bayesian model, cache=TRUE}
+# always put cache=TRUE in chunk when fitting Bayesian model so the first time it runs through it will cache the model and keep that as the output instead of re-running it when you knit it.
 
+fert.brms <- brm(YIELD~FERTILIZER,data=fert,iter=5000,warmup=500,chains=3,thin=2,refresh=0)
+# 5000 iterations (samples) per chain
+# first 500 samples reject (the warmup)
+# 3 chains - so do 3 rounds of sampling
+# only keep every 2nd sample (thin=2)
+# refresh=0 suppress the progress output
+```
 
 [https://github.com/stan-dev/stan/wiki/Prior-Choice-Recommendations]
 
+```{r identify what priors were used}
+# we need to know what priors were set for us - usually brms sets pretty good, well-informed priors
+# to work out what priors were used:
+
+prior_summary(fert.brms) # this means: hasn't given any priors for the slope - this means it just provides uniform priors (a.k.a improper priors - this is ok); for the intercept - using a t distribution with 3 degrees of freedom, centered on 161.5 (median yield) with std dev of 91.4 ('mean absolute deviation' is the robust version of standard deviation (like what the median is to the mean));
+
+# brms automatically centres your response data for you
+```
+```{r see stan code used to fit model}
+stancode(fert.brms)
+```
+```{r see what data stan produced}
+standata(fert.brms)
+```
+```{r set own priors and run brms model again, cache=TRUE}
+fert.priors <- c(prior(normal(160,90),class='Intercept'),
+                 prior(normal(0,10),class='b'),
+                 prior(cauchy(0,5),class='sigma'))
+
+fert.form <- bf(YIELD~FERTILIZER,family=gaussian())
+
+fert.brms <- brm(fert.form,data=fert,prior=fert.priors,sample_prior=TRUE,iter=5000,warmup=500,chains=3,thin=2,refresh=0)
+```
+
+```{r sample with the priors ONLY, cache=TRUE}
+# can ask brms to sample with the prior ONLY
+fert.samples <- brm(fert.form,data=fert,prior=fert.priors,sample_prior = 'only',refresh=0)
+conditional_effects(fert.samples) %>% plot(points=TRUE) # sampled from priors only with none of our own data 
+
+```
+```{r see what things we have - want an estimate of intercept, slope, std dev etc. - just need to know what they're called}
+fert.brms %>% get_variables()
+```
+
+when you fit an lm model you get a point estimate of intercept & slope - one value for each
+when you do bayesian you DON't get a point estimate - you get a distribution of what the intercept could be and a distribution of what the slope could be - so you could just calculate the mean as your point estimate
+
+```{r}
+fert.brms %>% posterior_samples() %>% as_tibble()
+```
+```{r calculate the mean & std dev etc. of the distributions the model gave us}
+fert.brms %>% posterior_samples() %>% median_hdci() # calculates the mean and upper & lower confidence limits (they're called credibility intervals) for each of the estimate distributions
+
+# hdci: highest density credibility interval (this is a good one to use) - credibility intervals better to use because they're more robust
+
+# we are 95% sure that the intercept is between the upper & lower confidence limits 
+# in frequentist language, you don't interpret it like this - you say 95% of intervals of that width will contain the true mean
 
 
+# before you look at any of this though, you should look at diagnostics
+```
 
 # Model validation
+```{r diagnostics for bayesian models}
+# time for some diagnostics!
+plot(fert.brms)
+# trace plots: we want total noise and about the same amount of noise for each parameter - i.e. the chains are well mixed (i.e. it's all noise) and they have converged on a stable posterior (all chains are saying the same thing)
+```
+```{r test for correlation in the sampling chains}
+mcmc_plot(fert.brms,type='acf_bar') # should all be less than 0.2 except for that initial bar - indicates the samples aren't correlated
+```
+```{r}
+available_mcmc() # lots of different things you can do here
+# useful ones are:
+# acf_bar - diagnositic plots
+# rhat_hist - chain convergence
+# neff_hist - effective sampling
+```
+```{r test for chain convergence}
+mcmc_plot(fert.brms,type='rhat_hist') # a measure of convergence of the chains - rhat values <1.05 are good - if not then your issues haven't converged well
+```
+```{r test for effective sampling}
+mcmc_plot(fert.brms,type='neff_hist') # want these values to be very high (up around 1) - ineffective samples are where  a sample was attempted but didn't work - lots of these may indicate that there's some strange features in your distribution that aren't being sampled very well
+```
 
+```{r test for overdispersion & outliers using simulated residuals}
+preds <- posterior_predict(fert.brms,nsamples=250,summary=FALSE)
+fert.resids <- createDHARMa(simulatedResponse = t(preds),
+                            observedResponse = fert$YIELD,
+                            fittedPredictedResponse = apply(preds,2,median),
+                            integerResponse = 'gaussian')
+plot(fert.resids)
+```
 
-
-
-
-
+```{r quick look at the model on a graph}
+ggpredict(fert.brms) %>% plot # this just shows a plot of the estimates from the model - looks like the model has done a reasonable job
+```
 # Model investigation / hypothesis testing
+```{r model summary}
+summary(fert.brms)
+library(broom.mixed)
+tidyMCMC(fert.brms,conf.int=TRUE,conf.method='HPDinterval') # shows you a nice output - the default is to calculate the mean of the distribution of estimates but you can set this if you want the median for example
+```
+```{r}
+fert.mcmc <- fert.brms %>% posterior_samples() # only posterior sampling
+fert.mcmc %>%  head
 
+# ok so what's the probability that yield increases as fertiliser increases - what's the probability that the slope is positive (>0)? well it's the (number of b_FERTILIZER > 0) / (total b_FERTILIZER)
+```
+```{r make a histogram of the slope estimates i.e. the b_FERTILIZER parameter}
+hist(fert.mcmc[,2]) # this is a distribution of all of the estimates of slope (i.e. the second parameter)
+```
+```{r}
+sum(fert.mcmc[,2]>0) # calculate how many of the slope estimates are greater than zero? - all of them!
+sum(fert.mcmc[,2]>0)/length(fert.mcmc[,2]) # this calculates the probability i.e. in this case it it 1
+```
+```{r testing a hypothesis}
+hypothesis(fert.brms,'FERTILIZER>0') #Post.Prob column shows you the probability that the slope is greater than zero - in this case the probability is 1.
+hypothesis(fert.brms,'FERTILIZER>1') # here we're testing the probability that the slope is greater than 1 - here the probability is only 0.02 
 
+# i.e. if you want to test a particular hypothesis you can
 
+```
 
+```{r more testing of hypotheses}
+# what about: how much did the yield change between 2 different amounts of fertiliser?
+# well we make some predictions first from our model
+fert.grid <- with(fert, list(FERTILIZER=c(200,100)))
+emmeans(fert.brms,pairwise~FERTILIZER,at=fert.grid)$contrast %>% as.data.frame
+
+# the results here are that the change in yield from 100 units of fertiliser to 200 units of fertiliser, there will be an 81 unit change in yield - and we're 95% sure the change in yield will be between 63units and 98 units
+```
+
+```{r some more testing of hypotheses}
+mcmc <- emmeans(fert.brms,~FERTILIZER, at=fert.grid) %>% 
+  gather_emmeans_draws() %>% 
+  spread(key=FERTILIZER,value=.value)
+# this gives you all your estimates for the yield at 100 and at 200
+
+mcmc %>% head
+
+# so what's the absolute change in yield? subtract the 100 column from the 200 column; and what about the percentage increase?
+
+mcmc.1 <- mcmc %>% mutate(Eff=`200`-`100`,PEff=100*(`200`-`100`)/`100`) #NB must be back ticks since the headings are numbers
+mcmc.1 %>% mean_hdi(PEff) # could also use median_hdi or other variations
+# on average, we expect the yield to increase by 61% from 100 to 200 units of fertiliser input and it could range between 43.9% and 78.8%
+# ok so what's the probability that it will change by more than 50%? well just test that hypothesis:
+mcmc.1 %>% hypothesis('PEff>50') # our results show that the probability of a >50% increase is 0.92 - pretty high!
+```
+```{r r-squared distribution}
+# what about r-squared values??
+bayes_R2(fert.brms)
+fert.r2 <- bayes_R2(fert.brms,summary=FALSE)
+hist(fert.r2)
+```
+
+# Predictions
+```{r make some predictions using your model}
+# now produce a plot of your model - first make predictions from the model
+fert.list <- with(fert,list(FERTILIZER=seq(min(FERTILIZER),max(FERTILIZER),len=100)))
+fert.new <- emmeans(fert.brms,~FERTILIZER,at=fert.list) %>% as.data.frame
+head(fert.new)
+```
+
+# Summary figures
+```{r summary plot}
+ggplot(fert.new,aes(x=FERTILIZER,y=emmean))+
+  geom_point(data=fert,aes(y=YIELD))+
+  geom_line()+
+  geom_ribbon(aes(ymin=lower.HPD,ymax=upper.HPD),fill='darkblue',alpha=0.3)+
+  scale_x_continuous('FERTILIZER')+
+  scale_y_continuous('YIELD')+
+  theme_classic()
+```
 
 ```{r mcmcpvalue, results='markdown', eval=FALSE}
 mcmcpvalue <- function(samp)
@@ -158,18 +324,4 @@ mcmcpvalue <- function(samp)
 }
 ```
 
-
-
-# Predictions
-
-
-
-
-
-# Summary figures
-
-
-
 # References
-
-                                 

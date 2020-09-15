@@ -113,28 +113,97 @@ ln\left(\frac{p_i}{1-p_i}\right) &= \beta_0 + \beta_1 x_i\\
 $$
 
 # Fit the model
+```{r fit a bayesian model using the data,cache=TRUE}
+polis.form <- bf(PA|trials(1)~RATIO,family=binomial())        # declare binomial distribution 
+polis.priors <-c(prior(normal(0,10),class='Intercept'),       # set priors
+                 prior(normal(0,1),class='b'))                
+# you can do these 2 steps inline in the brm function, but starts to get a bit messy
 
+polis.brm <- brm(polis.form,                                  # create model
+                 data=polis,
+                 prior=polis.priors,
+                 sample_prior = TRUE,
+                 iter=5000,
+                 warmup=2000,
+                 chains=3,
+                 thin=5,refresh=0)
+```
 
+# Model validation - check disgnostics
 
-
-
-# Model validation
-
-
-
-
-
-
+## Trace plots
+```{r check trace plots}
+plot(polis.brm) # check for total noise & for chain convergence - ok so the chains are well mixed and the chains converged on a stable posterior
+```
+## Sampling autocorrelation?
+```{r check autocorrelation}
+mcmc_plot(polis.brm,type='acf_bar')
+# yep all good - values are all under 0.2
+```
+## Chain convergence?
+```{r test for chain convergence}
+mcmc_plot(polis.brm,type='rhat_hist')
+```
+## Effective sampling?
+```{r test effective sampling}
+mcmc_plot(polis.brm,type='neff_hist')
+```
+## Overdispersion & outliers?
+```{r test for overdispersion & outliers using simulated residuals}
+preds <- posterior_predict(polis.brm,nsamples=250,summary=FALSE)
+polis.resids <- createDHARMa(simulatedResponse = t(preds),
+                            observedResponse = polis$PA,
+                            fittedPredictedResponse = apply(preds,2,median))
+plot(fert.resids)
+```
 
 # Model investigation / hypothesis testing
 
+## Intercept, slope, confidence intervals
+```{r model summary}
+tidyMCMC(polis.brm$fit,conf.int=TRUE,conf.method='HPDinterval',rhat=TRUE,ess=TRUE)
+# the 'polis$fit' bit means you get the 'rhat' and 'ess' - i.e. you need to include the fitted values that the model stored otherwise you won't get rhat & ess
 
+# rhat values should be < 1.05 
+# ess is a measure of sampling effectiveness
 
+# results tell us:
+# on a log odds ratio scale he intercept is 4.29
+# slope ranges from -0.5 to -0.08 (this interval does NOT include 0, so yes there is a significant relationship) - just remember the numbers are on a log odds scale so need to transform back 
+```
+## R Squared
+```{r r squared values}
+polis.r2 <- bayes_R2(polis.brm,summary=FALSE)
+polis.r2 %>% median_hdci()
+
+# so we're 95% sure between 0.33 & 0.62
+```
 
 # Predictions
-
+```{r}
+polis.list <- with(polis,list(RATIO=seq(min(RATIO),max(RATIO),len=100)))
+polis.new <- emmeans(polis.brm,~RATIO,at=polis.list,type='response') %>% as.data.frame
+head(polis.new)
+```
 # Summary figures
+```{r summary plot}
+ggplot(polis.new,aes(x=RATIO,y=prob))+
+  geom_point(data=polis,aes(y=PA))+
+  geom_line()+
+  geom_ribbon(aes(ymin=lower.HPD,ymax=upper.HPD),fill='darkgreen',alpha=0.3)+
+  scale_x_continuous('PA')+
+  scale_y_continuous('RATIO')+
+  theme_classic()
+```
 
 
+
+
+```{r}
+polis.mcmc <-polis.brm %>% posterior_samples()
+polis.mcmc %>% head
+as.vector(-polis.mcmc[,1]/polis.mcmc[,2]) %>% median_hdci() # LD50
+# the LD50 on average is at 16.4 where the probability changes from more likely present to more likely absent and we're 95% confident that's between 10.4 & 22.4
+```
 
 # References
