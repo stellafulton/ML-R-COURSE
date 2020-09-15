@@ -94,6 +94,7 @@ The aim of the analysis is to investigate the relationship between mussel clump 
 ```{r readData, results='markdown', eval=TRUE}
 peake = read_csv('../data/peakquinn.csv', trim_ws=TRUE)
 glimpse(peake)
+# so we will have Poisson distribution with log link & need to log transform area
 ```
 
 
@@ -111,36 +112,130 @@ ln(\lambda_i) &= \beta_0 + \beta_1 ln(x_i)\\
 $$
 
 # Fit the model
+```{r fit poisson, cache=TRUE}
+peake.form <- bf(INDIV~log(AREA),family=poisson(link='log')) # define form of the relationship
 
+get_prior(peake.form,data=peake) # see what priors have been set automatically - in this case it's only set a prior for intercept - it's completely fine to use the default priors
 
-
-
+peake.brmsP <- brm(peake.form,      # fit model using default priors
+                   data=peake,
+                   iter=5000,
+                   warmup=2000,
+                   chains=3,
+                   thin=5,
+                   sample_prior=TRUE,
+                   refresh=0)
+```
 
 # Model validation
 
+## Check the sampling of the posterior distribution
+```{r check diagnostics}
+plot(peake.brmsP) # trace plots: sampling well mixed and chains converged on a stable posterior - all good!
+mcmc_plot(peake.brmsP,type='acf_bar') # check autocorrelation
+mcmc_plot(peake.brmsP,type='rhat_hist') # check  chain convergence
+mcmc_plot(peake.brmsP,type='neff_hist') # check number of effective samples
 
+# all our diagnostics looks good so the posterior we're sampling from has done a good job
+```
+## Now check diagnostics for the model itself 
+```{r check for overdispersion & outliers}
+preds <- posterior_predict(peake.brmsP,nsamples=250,summary=FALSE)
+peake.resids <- createDHARMa(simulatedResponse = t(preds),
+                            observedResponse = peake$INDIV,
+                            fittedPredictedResponse = apply(preds,2,median))
+plot(peake.resids)
 
+# oooo ok so this isn't looking too good....there's overdispersion, outliers
+# could be overdispersed (more variability in the data than the Poisson would expect) - try Negative Binomial to deal with this
+# could be because there's lots of zeros - test for zero inflation if unsure
+```
+```{r zero inflation test}
+testZeroInflation(peake.resids) # ok so it doesn't fail a zero inflation test so that's not the problem
+```
+# Fit another model that will account for overdispersion
+```{r fit negtive binomial}
+peake.form <- bf(INDIV~log(AREA),family='negbinomial')
+peake.brmsNB <- brm(peake.form,data=peake,iter=5000,warmup=2000,chains=3,thin=5,refresh=0)
+prior_summary(peake.brmsNB)
+# would check all the usual diagnotics but we're going to skip over that for now to save time
+```
+```{r check overdispersion}
+preds <- posterior_predict(peake.brmsNB,nsamples=250,summary=FALSE)
+peake.resids <- createDHARMa(simulatedResponse = t(preds),
+                            observedResponse = peake$INDIV,
+                            fittedPredictedResponse = apply(preds,2,median))
+plot(peake.resids)
 
-
-
-
-
-
-
+# woo hoo! fitting a model using negtive binomial has worked much better! no overdispersion here!
+```
 
 # Model investigation / hypothesis testing
 
+## Compare our two models
+AIC is of no use in Bayesian statstics, but we can use other information criteria to compare Bayesian models e.g. WAIC, Leave one out LOOIC
+```{r}
+(l.brmsP <- loo(peake.brmsP)) # leave one out information criteria - the lower the better
+(l.brmsNB <- loo(peake.brmsNB)) # LOOIC value is much lower for this one than the Poisson model
+loo_compare(l.brmsNB,l.brmsP) # it is clear the NB is better than the P model
+```
 
 
+```{r}
+tidyMCMC(peake.brmsNB$fit,conf.int=TRUE,conf.method='HPDinterval',rhat=TRUE,ess=TRUE)
+exp(c(0.68,0.98))
+# for every one unit change in log(AREA,) the number of individuals increases by 100% or as high as 160%
+# i.e. don't forget to convert back to the response scale 
+```
 
+```{r}
+peake.brmsNB %>% gather_draws(x=`.*Intercept.*|.*AREA.*`,regex=TRUE) %>% 
+  median_hdci() %>% 
+  mutate(across(where(is.numeric),exp)) # the mutate part takes the exponent of all the columns that are numeric values
+```
 
-
+```{r r squared}
+bayes_R2(peake.brmsNB)
+```
 # Predictions
-
-
-
 # Summary figures
 
+```{r testing hypotheses / answering questions}
+# how much do we expect the number of individuals to change if the area increased from 5,000 to 10,000
+conditional_effects(peake.brmsNB)
 
+# create values you want to predict for 
+
+peake.list <- with(peake,list(AREA=c(5000,10000)))
+peake.new <- emmeans(peake.brmsNB,~AREA,at=peake.list,type='link') %>% 
+  gather_emmeans_draws() %>% 
+  spread(key=AREA, value=.value)
+peake.new %>% head
+
+peake.new1 <- peake.new %>% mutate(Diff1=exp(`10000`-`5000`),
+                                   Diff2=exp(`10000`)-exp(`5000`),
+                                   PercDiff=100*(exp(`10000`)-exp(`5000`))/exp(`5000`))
+peake.new1 %>% head
+
+peake.new1 %>% 
+  dplyr::select(Diff1,Diff2,PercDiff) %>% 
+  gather() %>% 
+  group_by(key) %>% 
+  median_hdci
+# so we expect a 77% increase in number of individuals from 5000 area to 10000 area
+# what's the probabilty that the increase in number of individuals is >50%?
+hypothesis(peake.new1,'PercDiff>60')
+
+peake.new.list <- with(peake,list(AREA=seq(min(AREA),max(AREA),len=100)))
+peake.newplot <- emmeans(peake.brmsNB,~AREA,at=peake.new.list,type='response') %>% as.data.frame()
+head(peake.newplot)
+ggplot(peake.newplot,aes(x=AREA,y=prob))+
+  geom_ribbon(aes(ymin=lower.HPD,ymax=upper.HPD),fill='green',alpha=0.3)+
+  geom_point(data=peake,aes(x=AREA,y=INDIV))+
+  geom_line()+
+  scale_x_log10()+
+  scale_y_log10()+
+  theme_bw()
+```
 
 # References

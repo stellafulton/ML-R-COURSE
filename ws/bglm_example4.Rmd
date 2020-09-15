@@ -95,6 +95,11 @@ The aim of the analysis is to investigate the effects of a range of predictors o
 ```{r readData, results='markdown', eval=TRUE}
 loyn = read_csv('../data/loyn.csv', trim_ws=TRUE)
 glimpse(loyn)
+
+# remember from our frequentist analysis we log transformed AREA, DIST, LDIST, and we treated grazing as a categorical variable
+loyn <- loyn %>% mutate(fGRAZE=factor(GRAZE))
+
+# we had previously decided to run a Gamma distribution
 ```
 
 # Exploratory data analysis
@@ -110,16 +115,76 @@ the scaled versions of distance (ln), distance to the nearest large patch (ln), 
 altitude on the abundance of forest birds.
 
 # Fit model
+```{r}
+loyn.form <- bf(ABUND~scale(log(DIST))+
+                  scale(log(LDIST))+
+                  scale(log(AREA))+
+                  fGRAZE+
+                  scale(ALT)+
+                  scale(YR.ISOL),
+                family=Gamma(link='log'))
 
-
-
+loyn.brms <- brm(loyn.form,data=loyn,chains=3,iter=5000,warmup=2000,refresh=0,thin=5)
+```
 
 # Model validation
+```{r check mcmc diagnostics}
+mcmc_plot(loyn.brms,type='trace') # trace plots - this takes a while because there's lots of plots
+mcmc_plot(loyn.brms,type='acf_bar') # check autocorrelation
+mcmc_plot(loyn.brms,type='rhat_hist') # check  chain convergence
+mcmc_plot(loyn.brms,type='neff_hist') # check number of effective samples
+
+# looks like the sampling is well mixed and has converged on a stable posterior distribution - all good
+```
+```{r check overdispersion & outliers}
+preds <- posterior_predict(loyn.brms,nsamples=250,summary=FALSE)
+loyn.resids <- createDHARMa(simulatedResponse = t(preds),
+                            observedResponse = loyn$ABUND,
+                            fittedPredictedResponse = apply(preds,2,median))
+plot(loyn.resids)
+
+# hmm no outliers but looks like there's an overdispersion issue here
+# Gamma is not necessarily a great fit for the data as a whole - if the response variable are averages of something then should be normal distribution (no relationship b/w mean and variance) - Gamma is assuming there is a relationship between mean and variance
+```
 
 # Model investigation / hypothesis testing
+```{r look at effect}
+tidyMCMC(loyn.brms$fit,conf.int=TRUE,conf.method='HPDinterval',rhat=TRUE,ess=TRUE)
+mcmc_plot(loyn.brms,type='intervals') # the ones that deviate the most from the line have the most effect (66% (thick dark blue lines) & 95% (thin blue lines) confidence intervals are given)
+```
+```{r compare effect of different grazing levels}
+# how about we compare the different grazing levels to each other (rather than compare them all to grazing level 1)
+(emmeans(loyn.brms,pairwise~fGRAZE,type='response'))
+#  1 / 2    0.848     0.465      1.34    -these results mean 2 is 0.848 of 1
+# when talking about significance - if the interval contains 1 then it is not significant, if it doesn't contain one, the effect is significant 
+# A tukey's test always tries to do adjustments but for Bayesian we don't need to do adjustments - so do it this way instead:
+#emmeans(loyn.brms,pairwise~fGRAZE,type='response') %>% contrast(adjust='NONE')
+```
 
 # Predictions
-
+```{r make predictions using the model we fitted}
+loyn.list<-with(loyn,list(AREA=seq(min(AREA),max(AREA),len=100)))
+loyn.new <- emmeans(loyn.brms,~AREA|fGRAZE,at=loyn.list,type='response') %>% as.data.frame()
+head(loyn.new)
+```
 # Summary figures
+```{r plot the model}
+ggplot(loyn.new,aes(x=AREA,y=response))+
+  geom_ribbon(aes(ymin=lower.HPD,ymax=upper.HPD,fill=fGRAZE),alpha=0.3)+
+  geom_line(aes(color=fGRAZE))+
+  theme_bw()+
+scale_x_log10()+scale_y_log10()
+
+# the confidence ribbon is messy because of the mcmc sampling - you can do a spaghetti plot that just plots lots of different realisations:
+spaghetti <- emmeans(loyn.brms,~AREA|fGRAZE,at=loyn.list,type='response') %>% gather_emmeans_draws() %>% mutate(Fit=exp(.value))
+wch <- sample(1:max(spaghetti$.draw),100,replace=FALSE)
+spaghetti <- spaghetti %>% filter(.draw%in%wch)
+ggplot(loyn.new)+
+  geom_line(data=spaghetti,aes(x=AREA,y=Fit,color=fGRAZE,group=interaction(fGRAZE,.draw)),alpha=0.05)+
+  geom_line(aes(y=response,x=AREA,color=fGRAZE))+
+  theme_bw()+
+  scale_x_log10()+scale_y_log10()
+
+```
 
 # References

@@ -154,7 +154,7 @@ preds <- posterior_predict(polis.brm,nsamples=250,summary=FALSE)
 polis.resids <- createDHARMa(simulatedResponse = t(preds),
                             observedResponse = polis$PA,
                             fittedPredictedResponse = apply(preds,2,median))
-plot(fert.resids)
+plot(polis.resids)
 ```
 
 # Model investigation / hypothesis testing
