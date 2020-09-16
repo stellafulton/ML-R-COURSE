@@ -93,6 +93,13 @@ LEAF   TREAT    NUMBER
 ```{r readData, results='markdown', eval=TRUE}
 tobacco = read_csv('../data/tobacco.csv', trim_ws=TRUE)
 glimpse(tobacco)
+tobacco <- tobacco %>% mutate(LEAF=factor(LEAF),TREATMENT=factor(TREATMENT))
+# blocking design - each leaf is a block, each leaf gets both treatments
+# in frequentist  the block is random factor, the treatment is a fixed factor
+# in bayesian, all effects are considered random, instead the leaf would be considered a varying effect
+
+# so removal, control (the treatment) are fixed effects, the plots are random effects - response is benthic community composition, recruitment, algae canopy height, number of holdfasts, sediment deposition etc. etc.??
+# each treatment is applied to each block/leaf - configuration is randomised
 ```
 
 
@@ -108,16 +115,131 @@ where $\boldsymbol{\beta}$ and $\boldsymbol{\gamma}$ are vectors of the fixed an
 and $\bf{X}$ is the  model matrix representing the overall intercept and effects of the treatment on the number of lesions.
 $\bf{Z}$ represents a cell means model matrix for the random intercepts associated with leaves.
 
+```{r exploratory plots}
+ggplot(tobacco,aes(x=as.numeric(LEAF),y=NUMBER,))+
+  geom_line(aes(linetype=TREATMENT))
+
+ggplot(tobacco, aes(y=NUMBER,x=TREATMENT))+
+  geom_point()+facet_grid(~LEAF)
+
+ggplot(tobacco, aes(y=NUMBER,x=TREATMENT))+geom_point()+geom_line(aes(x=as.numeric(TREATMENT)))+facet_grid(~LEAF)
+
+# looking at this graph, LEAF 1,2,3 are all very similar
+# baselines are different & slopes differ - magnitude of effect could differ b/w leaves - random intercept random slope model => they all have their own intercept & own slopes it will ultimately only tell us what average intercept & average slope is BUT  it will also record how variable intercepts are & how variable slopes are 
+```
+
 # Fit the model
+## random intercept model
+```{r fit bayesian mixed effects model using gaussian distribution - random intercept fixed slopee, cache=TRUE}
+tobacco.form <- bf(NUMBER~(1|LEAF)+TREATMENT,family=gaussian) # intercept can differ for each leaf
+tobacco.brms <- brm(tobacco.form,data=tobacco,iter=5000,warmup=2000,thin=5,chains=3,refresh=0) # varying intercept model
 
+# if you get a lot of divergent transitions (i.e. ball rolls off the surface) then you can adjust how much the ball is hit to accept small transitions:
+tobacco.brms <- brm(tobacco.form,data=tobacco,iter=5000,warmup=2000,thin=5,chains=3,refresh=0,control=list(adapt_delta=0.99)) # adapt_delta is default set to 0.95 (i.e. reject 5% of step lengths) - by setting it to 0.99 it will only reject 1% of step lengths 
 
+pairs(tobacco.brms) # to identify divergent transitions 
+```
 
 # Model validation
+## random intercept model
+```{r check chain characteristics}
+plot(tobacco.brms)                        # check trace plots
+mcmc_plot(tobacco.brms,type='acf_bar')    # check autocorrelation
+mcmc_plot(tobacco.brms,type='neff_hist')  # check number of effective samples
+mcmc_plot(tobacco.brms,type='rhat_hist')  # check chain convergence
+
+# yep looks like sampling is well mixed and chains converged on a stable posterior
+```
+# Fit model
+## random intercept random slope model
+```{r fit bayesian mixed effects model using gaussian distribution - random intercept random slope, cache=TRUE}
+# we've done the random intercept model, what about a random intercept, random slope model
+tobacco.form1 <- bf(NUMBER~(TREATMENT|LEAF)+TREATMENT,family=gaussian)
+tobacco.brms1 <- brm(tobacco.form1,data=tobacco,iter=5000,warmup=2000,thin=5,chains=3,refresh=0,control=list(adapt_delta=0.99)) 
+# this came out with 2 divergent transitions (divergent transitions are often to do with standard deviation - and so often issues with autocorrelation)
+```
+# Validate model
+## random intercept random slope model
+```{r}
+plot(tobacco.brms1)                        # check trace plots
+mcmc_plot(tobacco.brms1,type='acf_bar')    # check autocorrelation
+mcmc_plot(tobacco.brms1,type='neff_hist')  # check number of effective samples
+mcmc_plot(tobacco.brms1,type='rhat_hist')  # check chain convergence
+
+# issues with autocorrelation - can try to deal with this by increasing number of iter, warmup & thinning
+```
+# Fit model
+## random intercept random slope with more iterations etc. etc.
+```{r cache=TRUE}
+# increase number of iter, warmup, thinning to try get rid of autocorrelation
+tobacco.form1 <- bf(NUMBER~(TREATMENT|LEAF)+TREATMENT,family=gaussian)
+tobacco.brms2 <- brm(tobacco.form1,data=tobacco,iter=10000,warmup=5000,thin=10,chains=3,refresh=0,control=list(adapt_delta=0.99)) 
+```
+# Validate model
+```{r check chain characteristics}
+mcmc_plot(tobacco.brms2,type='acf_bar')    # this is better - not as much autocorrelation
+plot(tobacco.brms1)                        # check trace plots
+mcmc_plot(tobacco.brms1,type='neff_hist')  # check number of effective samples
+mcmc_plot(tobacco.brms1,type='rhat_hist')  # check chain convergence
+```
+# Compare models 
+```{r LOOIC values}
+(l.1 <- loo(tobacco.brms))  # random intercept
+(l.1 <- loo(tobacco.brms2)) # random intercept random slope
+
+# ok so the random intercept random slope model isn't actually better so let's just stick with random intercept model
+```
+# Validate the best model a bit more
+## random intercept model
+```{r check for overdispersion}
+preds <- posterior_predict(tobacco.brms,nsamples=250,summary=FALSE)
+tobacco.resids <- createDHARMa(simulatedResponse = t(preds),
+                             observedResponse = tobacco$NUMBER,
+                             fittedPredictedResponse = apply(preds,2,median))
+plot(tobacco.resids)
+# remember this is a really small dataset so can't worry too much about all the red on the residuals plot
+
+# SIDE NOTE: other than divergent transitions, for any other problems go back to your priors and narrow them a bit to try fix things 
+
+```
 
 # Model investigation / hypothesis testing
+```{r preliminary look at model}
+ggpredict(tobacco.brms) %>% plot # plot with ggpredict to get a feel for what the model should produce
+```
+
+```{r model summary}
+summary(tobacco.brms)
+# for the varying effects (group-level effects) the std dev between intercepts is 3.48 units - i.e. how varied were the intercepts?
+tidyMCMC(tobacco.brms$fit,conf.int=TRUE,conf.method='HPDinterval',rhat=TRUE,ess=TRUE,estimate.method='median')
+# leaf 7 had 4 more lesions than the average baseline - all of those effects sum to zero - sometimes to referred to as sum to zero effects 
+
+```
+
+```{r r-squared values}
+# r-squared of effects & r-squared for all effects (including varying effects)
+bayes_R2(tobacco.brms,re.form=NA,summary=FALSE) %>% median_hdi # re.form specifies what to do about random effects - NA means don't include random effects - # marginal r-squared
+bayes_R2(tobacco.brms,re.form=N~(1|LEAF),summary=FALSE) %>% median_hdi # this will include the varying effects for leaf - the random effect for LEAF  - # conditional r-squared
+```
 
 # Predictions
+```{r testing hypotheses with probabilities}
+# no back transformations required because we're dealing with Gaussian
+hypothesis(tobacco.brms,'TREATMENTWeak<0') # this tells us what is the probability that the number of lesions from strong inoculation is greater than weak? in this case - prob=1
+
+# what about the probability that the difference b/w strong & weak is more than 50%? i.e. what is the probability of a more than 50% increase from weak to strong?
+tobacco.new <- emmeans(tobacco.brms,~TREATMENT) %>% gather_emmeans_draws() %>% spread(key=TREATMENT,value=.value)
+tobacco.new <- tobacco.new %>%  mutate(Eff=Strong-Weak,PEff=100*(Strong-Weak)/Weak)
+tobacco.new %>% summarize(Prob=sum(PEff>50)/n())
+```
 
 # Summary figures
+```{r}
+tobacco.plot <- emmeans(tobacco.brms,~TREATMENT) %>% as.data.frame()
+tobacco.plot %>% head
+ggplot(tobacco.plot,aes(x=TREATMENT,y=emmean))+
+  geom_pointrange(aes(ymin=lower.HPD,ymax=upper.HPD))+
+  theme_bw()
+```
 
 # References

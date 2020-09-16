@@ -108,11 +108,19 @@ Autumn   Low       14         3.74           AutumnLow
 quinn = read_csv('../data/quinn.csv', trim_ws=TRUE)
 glimpse(quinn)
 summary(quinn)
+# multivariate ANOVA
+# 2 experimental treatments that were crossed 
+# 4 seasons crossed with the 2 densities = 8 parameters (1 is the intercept, the first combination of groups, the others are the slopes and are the main effects & their interactions)
+# let's start with a Poisson because we're dealing with counts 
 ```
 
 ```{r dataprep, results='markdown', eval=TRUE}
 quinn = quinn %>% mutate(SEASON = factor(SEASON),
                          DENSITY = factor(DENSITY))
+# declare categories as factors
+# how about we re-order the seasons:
+quinn <- quinn %>% mutate(SEASON=factor(SEASON,levels=c('Summer','Autumn','Winter','Spring')),DENSITY=factor(DENSITY))
+levels(quinn$SEASON)
 ```
 
 	
@@ -132,15 +140,187 @@ $$
 where $\boldsymbol{\beta}$ is a vector of effects parameters and $\bf{X}$ is a model matrix representing the intercept and effects of season, density and their interaction on mussel recruitment.
 
 # Fit the model
-
-
+## Poisson
+```{r fit bayesian model with poisson distribution & interaction b/w season & density, cache=TRUE}
+quinn.form <- bf(RECRUITS~SEASON*DENSITY,family=poisson(link='log'))
+quinn.brmsP <- brm(quinn.form,data=quinn,refresh=0,chains=3,iter=5000,warmup=2000,thin=5)
+```
 
 # Model validation
+```{r check sampling of chains}
+plot(quinn.brmsP)                         # check trace plots
+mcmc_plot(quinn.brmsP,type='acf_bar')     # check autocorrelation of samples
+mcmc_plot(quinn.brmsP,type='rhat_hist')   # check chain convergence
+mcmc_plot(quinn.brmsP,type='neff_hist')   # check number of effective samples
+
+# all looks ok
+```
+```{r check for overdispersion & outliers using simulated residuals}
+preds <- posterior_predict(quinn.brmsP,nsamples=250,summary=FALSE)
+quinn.resids <- createDHARMa(simulatedResponse = t(preds),
+                             observedResponse = quinn$RECRUITS,
+                             fittedPredictedResponse = apply(preds,2,median))
+plot(quinn.resids)
+# hmm there's some problems here - evidence for overdispersion & some outliers - could  try a Neg Binomial, could try zero inflation model, OR could add an observation level random effect:
+
+# observation level random effect - you add a variable that's numbered from 1 through to the number of observations you've got - it's like a dummy variable
+
+# caveat with adding an observation level random effect: statistical shrinking - estimates tend to get shrunk in towards the mean - adding observation level random effects can increase the amount of shrinkage
+```
+```{r test for zero inflation}
+testZeroInflation(quinn.resids) # let's just check for zero inflation - hmm there's a small amount but a negative binomial will probably account for it ok
+```
+# Re-fit model to try account for overdispersion
+# Negative Binomial
+```{r fit bayesian model using negative binomial distribution}
+quinn.formNB <- bf(RECRUITS~SEASON*DENSITY,family=negbinomial(link='log'))
+quinn.brmsNB <- brm(quinn.formNB,data=quinn,refresh=0,chains=3,iter=5000,warmup=2000,thin=5)
+```
+# Model validation
+```{r}
+mcmc_plot(quinn.brmsNB,type='trace')
+# no divergences to plot
+# divergences refers to samples that it thinks that are not right (e.g. ball rolls off the curve) - if you get lots of them that is bad - but you can adjust the warmup 'hit strength' to accept smaller hits - this will slow down the model, so the default is a compromise b/w speed & number of divergences
+mcmc_plot(quinn.brmsNB,type='acf_bar')     # check autocorrelation of samples
+mcmc_plot(quinn.brmsNB,type='rhat_hist')   # check chain convergence
+mcmc_plot(quinn.brmsNB,type='neff_hist')
+
+```
+```{r check for overdispersion & outliers}
+preds <- posterior_predict(quinn.brmsNB,nsamples=250,summary=FALSE)
+quinn.resids <- createDHARMa(simulatedResponse = t(preds),
+                             observedResponse = quinn$RECRUITS,
+                             fittedPredictedResponse = apply(preds,2,median))
+plot(quinn.resids)
+
+# ok this looks pretty good
+```
+# Model comparison
+```{r compare P & NB models with LOOIC}
+(loo.P<-loo(quinn.brmsP))      # LOOIC =
+(loo.NB<-loo(quinn.brmsNB))    # LOOIC = 
+```
+# Further model validation
+```{r plot simulated residuals against individual predictors}
+# you should plot residuals against each of your predictors & against any other variables you think might be important perhaps for e.g. time
+# so far we've only plotted them against season*density (because that's what we put in the model)
+
+# so let's plot residuals against season, and against density
+
+# you can plot with ggplot without a dataset and instead just calling a vector
+ggplot()+
+  geom_point(data=NULL,aes(y=quinn.resids$scaledResiduals,x=quinn$SEASON)) # plot simulated residuals against SEASON - we want NO PATTERN
+
+ggplot()+
+  geom_point(data=NULL,aes(y=quinn.resids$scaledResiduals,x=quinn$DENSITY)) # plot simulated residuals against DENSITY
+
+# it is possible for patterns in the individual residual-predictor plots to be masked in the full plot so it is worth looking at these
+```
+```{r quick look at model plot}
+g <- ggpredict(quinn.brmsNB) %>% plot # quick look at ggpredict plot to see what we might expect from our model # these graphs are partial plots - average when holding the reference group constant so the first graph is average number of recruits each season at high density, bottom graph is average number of recruits at each density in summer
+do.call('grid.arrange',g) # does a call for each item in list (kind of like a loop) # now we get both graphs
+
+# the following 2 lines of code does exactly the same thing just less elegant
+grid.arrange(g[[1]],g[[2]])
+grid.arrange(g[['SEASON']],g[['DENSITY']])
+```
+```{r indicative plot showing interactions}
+ggemmeans(quinn.brmsNB,terms=c('SEASON','DENSITY')) %>% plot
+```
 
 # Model investigation / hypothesis testing
+```{r summarise model, let's see if there's any effect}
+tidyMCMC(quinn.brmsNB$fit,conf.int=TRUE,conf.method = 'HPDinterval',rhat=TRUE,ess=TRUE)
+# autumn has 0.89 lower recruitment than summer 
+# winter is 2.15 less than summer
+# spring is less than summer too
+# low density is lower than high density
+
+# the interaction terms represent how much the difference between low & high density change for each season - based on confidence intervals it seems the difference b/w low & high density in spring is significantly different to the difference b/w low & high density in summer
+
+
+# this shows some evidence of interactions - remember these numbers are on log scale still
+# this only shows difference e.g. difference b/w summer & autumn at high density, diff b/w high & low density at summer - NOT on average
+```
 
 # Predictions
-
+```{r}
+quinn.new <- emmeans(quinn.brmsNB,~SEASON|DENSITY,type='response') %>% as.data.frame()
+head(quinn.new)
+```
 # Summary figures
+```{r plot model}
+(g1 <- ggplot(quinn.new,aes(x=SEASON,y=prob,fill=DENSITY))+
+  geom_pointrange(aes(ymin=lower.HPD,ymax=upper.HPD),shape=21,position=position_dodge(width=0.5))+
+  theme_bw())
+```
+```{r}
+emmeans(quinn.brmsNB,pairwise~DENSITY|SEASON,type='response') # compare densities within in each season (perform pairwise tests for density separately for each season - that's what the | means)
+# $emmeans - these numbers are what's on the graph above
+
+# $contrasts - this is what we're interested in - the actual contrasts 
+
+# in winter on average there's a 116% increase in high density compared to low density
+# predominantly in summer that you see the density effect
+
+# but we want the probabilites associated with these differences
+```
+```{r}
+quinn.em <- emmeans(quinn.brmsNB,pairwise~DENSITY|SEASON,type='link')$contrast %>% 
+  gather_emmeans_draws() %>% 
+  mutate(Fit=exp(.value)) 
+quinn.em %>% head
+quinn.em %>% group_by(contrast,SEASON) %>% median_hdi()
+quinn.em %>% group_by(contrast,SEASON) %>% summarize(P=sum(Fit>1)/n()) # so in summer & winter there is strong evidence to suggest a difference between recruitment in high & low density beds
+```
+```{r caterpillar plots}
+(g2 <- quinn.em %>% group_by(contrast,SEASON) %>% median_hdi() %>% 
+  ggplot()+
+  geom_pointrange(aes(x=SEASON,y=Fit,ymin=Fit.lower,ymax=Fit.upper),color='darkblue')+
+  geom_hline(yintercept=1,linetype='dashed')+coord_flip()+
+  scale_y_continuous('Effect size (high/low)'))
+
+# on average in summer there's almost a doubling of recruitment in high & low densities
+  
+grid.arrange(g1,g2,nrow=1)
+```
+```{r average effect - marginal means}
+# what about the average effect? i.e. difference b/w high & low density ON average across all seasons? or difference b/w summer & winter ON average across both high & low density
+emmeans(quinn.brmsNB,pairwise~DENSITY,type='link') # this shows the average effect of density (marginal means) averaged across all seasons
+emmeans(quinn.brmsNB,pairwise~SEASON,type='link') # this shows average effect of season across both high & low density
+```
+# Fit model with observation level random effect
+```{r add observation level random effect}
+quinn <- quinn %>% mutate(Obs=factor(1:n())) # create dummy variable 'Obs' which just numbers the observations
+quinn %>% head
+quinn.form.obs <- bf(RECRUITS~SEASON*DENSITY+(1|Obs),family=poisson(link='log'))
+quinn.brmsU <- brm(quinn.form.obs,data=quinn, refresh=0,chains=3,iter=5000,warmup=2000,thin=5)
+```
+# Validate model
+```{r check overdispersion}
+preds <- posterior_predict(quinn.brmsU,nsamples=250,summary=FALSE)
+quinn.resids <- createDHARMa(simulatedResponse = t(preds),
+                             observedResponse = quinn$RECRUITS,
+                             fittedPredictedResponse = apply(preds,2,median))
+plot(quinn.resids)
+# oh dear this is not good
+# the alternative is to create the dummy variable differently
+```
+# Fit model with different dummy variable
+```{r}
+# we created a dummy variable Obs - free across whole dataset - how about we do it just within each group (i.e. number each group 1 to 10)
+quinn <- quinn %>% group_by(SEASON,DENSITY) %>% mutate(Obs=factor(1:n())) # create dummy variable 'Obs' which just numbers the observations
+quinn.form.obs1 <- bf(RECRUITS~SEASON*DENSITY+(1|Obs),family=poisson(link='log'))
+quinn.brmsU <- brm(quinn.form.obs1,data=quinn, refresh=0,chains=3,iter=5000,warmup=2000,thin=5)
+```
+
+# Validate model
+```{r}
+preds <- posterior_predict(quinn.brmsU,nsamples=250,summary=FALSE)
+quinn.resids <- createDHARMa(simulatedResponse = t(preds),
+                             observedResponse = quinn$RECRUITS,
+                             fittedPredictedResponse = apply(preds,2,median))
+plot(quinn.resids)
+```
 
 # References

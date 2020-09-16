@@ -101,6 +101,9 @@ S       12
 ```{r readData, results='markdown', eval=TRUE}
 day = read_csv('../data/day.csv', trim_ws=TRUE)
 glimpse(day)
+# response variable - count - number of barnacles settled - try Poissonfirst - then maybe Neg Binomial?
+# categorical variable for treatment - surfaces for barnacle settlement - declare as factor
+day <- mutate(day, TREAT=factor(TREAT))
 ```
 
 
@@ -120,16 +123,141 @@ $$
 where $\boldsymbol{\beta}$ is a vector of effects parameters and $\bf{X}$ is a model matrix representing the intercept and treatment contrasts for the effects of Treatment on barnacle recruitment.
 
 # Fit the model
+```{r fit a bayesian model using poisson distribution, cache=TRUE}
+day.form <- bf(BARNACLE~TREAT,family=poisson(link='log')) # set form first
+day.brmsP <- brm(day.form, data=day,iter=5000,chains=3,warmup=2000,refresh=0,thin=5) # fit model
+# each observation potentially comes from a different Poisson distribution depending on the treatment
+# formula: log(lambda)= b0 + b1X1 + b2X2 + b3X3
+# b0 = mean of algae 1 on a log scale
+# b1 = algae 1 - algae 2
+# b2 = algae 1 - naturally bare
+# b3 = algae 1 - scarped bare
 
+# so we're estimating 4 parameters - we need a prior for each of these parameters  - prior on intercept & 3 slopes 
+# you could set 3 separate slope priors but more typical to say they've all got the same prior - model runs faster
+# even though you can set the priors to be different for each slope the models will run slower
 
-                                           
+# when you're working out what would be a useful prior - need to consider that the priors are usually provided on the 'link' scale - in this case - a log scale
+
+prior_summary(day.brmsP)
+# for the intercept it is using a prior that is drawn from a t distribution with 3 degrees of freedom, mean/centered at 3, std dev 2.5 (NB: on a log scale); hasn't set proper priors for each of the slope 'improper priors'
+# REMEMBER: priors are on the link scale
+
+# recommendation: use priors that are already provided by the brm function but always note what they are.
+```
 
 # Model validation
+```{r check sampling}
+plot(day.brmsP) # chains are well mixed & have converged on a stable posterior
+# mcmc_plot(day.brmsP,type='trace') # use this to get trace plots only
 
+mcmc_plot(day.brmsP,type='neff_hist') # check for number of effective samples
+mcmc_plot(day.brmsP,type='rhat_hist') # check for chain convergence
+mcmc_plot(day.brmsP,type='acf_bar') # check for autocorrelation
+```
+```{r check overdispersion & outliers using simulated Residuals}
+preds <- posterior_predict(day.brmsP,nsamples=250,summary=FALSE) # taking our model & running posterior predict - this is predicting new values from the posterior distribution (the thing we're trying to estimate) - it's drawing 250 random samples from the posterior distribution associated with each observation (given the treatment group - that's all the info it has about the observation) e.g. observation1 - we know what we observed, now we're going to predict by drawing 250 predictions for that observation - we now have 250 examples of what observation 1 should be like - this goes on and on for all observations # this is making predictions - entering into model equation & adding on the total noise
+day.resids <- createDHARMa(simulatedResponse = t(preds),
+                           observedResponse = day$BARNACLE,
+                           fittedPredictedResponse = apply(preds,2,median)) # then it puts a star on the graph if one the observed values lies far outside the predicted values that it created 
+
+# difference b/w prediction intervals & confidence intervals (i.e. predicted values & fitted values):
+# predict = takes into account the noise - plugs values into model, calculates result taking into account standard error (i.e. noise) - takes into account uncertainty in each coefficient => this is confidence interval - now if we add on total unexplained variability in our model residuals we get prediction intervals
+# confidence intervals are saying - in general, what would you expect on average the situation to be - what would be the expected value associated with a given x value
+# prediction interval - if you were to take 1 single observation, what do I expect it to be (this will be a wider interval)
+# fitted values = plug in values into our model and calculate exact result
+
+plot(day.resids) # plot here looks pretty good - no evidence of outliers, no evidence of overdispersion, so our model seems reasonable
+```
 # Model investigation / hypothesis testing
+```{r}
+ggpredict(day.brmsP,term='TREAT') %>% plot # ggpredict is good for producing simple prediction graphs
+# plots predictions - good to just get a quick visual for what to expect
+```
+```{r check out our model}
+summary(day.brmsP) # can use summary OR
+tidyMCMC(day.brmsP$fit,conf.int=TRUE,ess=TRUE,rhat=TRUE,conf.method='HPDinterval') # can use tidyMCMC for neater output
+
+# for number of effective samples (ess) want at least 50% of total samples - in summary it tells you how many post-warmup samples it ran - so ess should be at least 50% of that value
+
+# NB: results are on a log scale!
+# so our interpretation of this is ON A LOG SCALE
+# b_Intercept is algae 1    
+# b_TREATALG2 is algae 1 - algae 2          # based on confidence intervals this is not significant (because confidence interval includes zero) but it's so close that it probably is important 
+# b_TREATNB is algae 1 - naturally bare     # based on CI - this is significant
+# b_TREATS is algae 1 - scraped bare        # based on CI - this is significant
+```
+
+```{r caterpillar plot}
+mcmc_plot(day.brmsP,type='intervals')
+```
+```{r testing hypotheses}
+hypothesis(day.brmsP,'TREATALG2>0') # probability that number of barnacles on algae 2 is greater than number of barnacles algae 1 is 0.97 (1-tail test) so there is definitely evidence of a difference between algae 1 & algae 2
+# evidence ratio: 35 times MORE evidence that algae 2 is greater than algae 1, than against that - that's pretty high, so even though the confidence interval in the summary only just contained zero (which indicates the difference is NOT signficant) the difference is actually significant - so always need to explore model thoroughly
+
+# if wanted to know likelihood of difference b/w algae 2 & naturally bare for example you type it in this way:
+hypothesis(day.brmsP,'TREATALG2-TREATNB>0') # OR hypothesis(day.brmsP,'TREATALG2>TREATNB') # this is an alternative to doing pairwise comparison - but it's easiest to do this using emmeans
+```
+```{r pairwise comparison using emmeans}
+emmeans(day.brmsP,pairwise~TREAT,type='response')
+# interpretation of this on the response scale because we asked it to do a back-transform
+# so for example, the median number of barnacles on algae 1 is 1.5 times greater than on naturally bare
+# e.g. median number of barnacles on naturally bare is 1.14 times greater than on scraped bare
+
+# what about probabilities? i.e. what is the probability that number of barnacles on algae 1 is greater than on algae 2?
+```
+
+```{r capture pairwise comparisons using emmeans on both link & response scale}
+day.em <- emmeans(day.brmsP,pairwise~TREAT,type='link')$contrasts %>% 
+  gather_emmeans_draws() %>% 
+  mutate(Fit=exp(.value)) # you could just ask for type='response' instead of adding this line on, but by adding this line on you create a new column with the back-transformed values, so in day.em you'll have the log values and the backtransform values i.e. you get both the log link scale and the response scale
+day.em %>% head
+
+day.em %>% group_by(contrast) %>% median_hdi() # we now have numbers being calculated on the link scale and the response scale 
+
+day.em %>% group_by(contrast) %>% summarize(P=sum(.value>0)/n()) # probabilities on link scale
+# 0.77 chance that NB is greater than S - that's not much evidence - above 0.8 you have strong evidence of a difference
+
+day.em %>% group_by(contrast) %>% summarize(P=sum(Fit>1)/n()) # probabilities on response scale - no difference to link scale because they're probabilities - DUH!
+
+hypothesis(day.brmsP,'TREATNB>TREATS') # evidence ratio 3.4 means 3.4 times as much evidence for this hypothesis than against - that's not a whole lot
+
+# with bayesian you can do as many comparisons as you want without compromising on power (compare with Tukey's test type comparisons where you can only do #parameters-1 number of comparisons)
+
+# ok so how about some planned contrasts (like how we did with frequentist)
+
+```
+```{r planned contrasts}
+# let's make some of out own comparisons - we are not restricted by how many we can do in bayesian stats because we're just slicing up the posterior distribution different ways - it doesn't change no matter how many times we look at it
+# the other rule was each of the comparisons had to be independent but in bayesian stats this doesn't have to be the case! wowwee! don't have to check for independence - there are no limits! woo hoo!
+
+cmat <- cbind('Alg2_Alg1'=c(1,-1,0,0),
+              'NB_S'=c(0,0,1,-1),
+              'Alg_Bare'=c(0.5,0.5,-0.5,-0.5),
+              'Alg_NB'=c(0.5,0.5,-1,0))
+emmeans(day.brmsP,~TREAT,contr=list(TREAT=cmat),type='response')
+
+# what about probabilities?? same as before
+day.em1 <- emmeans(day.brmsP,~TREAT,contr=list(TREAT=cmat),type='link')$contrasts %>% 
+  gather_emmeans_draws() %>% 
+  mutate(Fit=exp(.value)) 
+day.em1 %>% group_by(contrast) %>% summarize(P=sum(.value>0)/n())
+
+# what is the probability that each of those are more than 10% effect?:
+day.em1 %>% group_by(contrast) %>% summarize(P=sum(Fit>1.1)/n())
+```
 
 # Predictions
+```{r}
+day.new <- emmeans(day.brmsP,~TREAT,type='response') %>% as.data.frame()
+head(day.new)
+```
 
 # Summary figures
+```{r}
+ggplot(day.new,aes(x=TREAT,y=rate))+
+  geom_pointrange(aes(ymin=lower.HPD,ymax=upper.HPD),color='darkgreen')+
+  theme_bw()
+```
 
 # References

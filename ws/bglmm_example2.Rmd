@@ -62,7 +62,6 @@ library(tidybayes)  #for more tidying outputs
 library(ggeffects)  #for partial plots
 library(tidyverse)  #for data wrangling etc
 ```
-```
 
 # Scenario
 
@@ -111,6 +110,10 @@ FISHID   MASS    TRIAL             SMR\_contr   CHANGE
 ```{r readData, results='markdown', eval=TRUE}
 norin = read_csv('../data/norin.csv', trim_ws=TRUE)
 glimpse(norin)
+# response variable is metabolic rate
+head(norin)
+# declare categorical variables as factors
+norin <- mutate(norin,TRIAL=factor(TRIAL))
 ```
 
 
@@ -126,19 +129,133 @@ where $\boldsymbol{\beta}$ and $\boldsymbol{\gamma}$ are vectors of the fixed an
 and $\bf{X}$ is the  model matrix representing the overall intercept and effects of temperature and (centered) mean fish size on SDA peak.
 $\bf{Z}$ represents a cell means model matrix for the random intercepts associated with individual fish.
 
-# Fit the model
+```{r prelim scatter plot}
+# whack up a quick plot to see what's happening with the data before we explore models
+ggplot(norin,aes(x=SMR_contr,y=CHANGE,shape=TRIAL,color=TRIAL))+   
+  geom_smooth(method='lm')+geom_point() 
+```
+# FIT random intercept model
+```{r fit bayesian model assuming CHANGE is drawn from gaussian distribution - random intercept,cache=TRUE}
+norin.form <- bf(CHANGE~(1|FISHID)+TRIAL*SMR_contr+MASS,family=gaussian)
+norin.brms <- brm(norin.form,data=norin,iter=5000,warmup=2000,chains=3,refresh=0,thin=5)
+# FISH ID varying block (random block)
+# TRIAL*SMR_contr - interaction between trial & smr_contr (we ran the additive model when we did frequentist version remember)
+# + MASS as a covariate (to soak up unexplained variability)
+```
 
+# VALIDATE random intercept model
+```{r check chain characteristics}
+norin.brms %>% get_variables() # wayyy too much to just do plot(norin.brms) so just ask it to plot some of them
+mcmc_plot(norin.brms,type='trace',regex_pars='^b.Intercept|TRIAL|SMR|MASS|[sS]igma|^sd') #refer to regular expression cheatsheet for what all the symbols mean
+# ^ = first character, so ^b.Intercept means starts with a b, then any character at all, then intercept, then anything that has trial OR smr OR mass anywhere, and then sigma anyway with either s or S, and then something that starts with sd
 
+mcmc_plot(norin.brms,type='acf_bar',regex_pars='^b.Intercept|TRIAL|SMR|MASS|[sS]igma|^sd')   # check autocorrelation
+mcmc_plot(norin.brms,type='neff_hist',regex_pars='^b.Intercept|TRIAL|SMR|MASS|[sS]igma|^sd') # check number of effective samples
+mcmc_plot(norin.brms,type='rhat_hist',regex_pars='^b.Intercept|TRIAL|SMR|MASS|[sS]igma|^sd') # check chain convergence
 
+# all looks good so we can say the sampling is well mixed and the chains have converged on a stable posterior
+```
+# FIT random intercept random slope model
+```{r fit random slope model,cache=TRUE}
+norin.form1 <- bf(CHANGE~(SMR_contr|FISHID)+TRIAL*SMR_contr+MASS,family=gaussian)
+norin.brms1 <- brm(norin.form1,data=norin,iter=10000,warmup=5000,chains=3,refresh=0,thin=10,control=list(adapt_delta=0.99)) # remember if too many divergent transitions, just adjust delta so that smaller transitions are accepted, & perhaps increase iterations, warmup & thinning
+```
 
+# VALIDATE random intercept random slope model
+```{r}
+mcmc_plot(norin.brms1,type='trace',regex_pars='^b.Intercept|TRIAL|SMR|MASS|[sS]igma|^sd') 
+mcmc_plot(norin.brms1,type='acf_bar',regex_pars='^b.Intercept|TRIAL|SMR|MASS|[sS]igma|^sd')   # check autocorrelation
+mcmc_plot(norin.brms1,type='neff_hist',regex_pars='^b.Intercept|TRIAL|SMR|MASS|[sS]igma|^sd') # check number of effective samples
+mcmc_plot(norin.brms1,type='rhat_hist',regex_pars='^b.Intercept|TRIAL|SMR|MASS|[sS]igma|^sd') # check chain convergence
 
+# all looks good so we can say the sampling is well mixed and the chains have converged on a stable posterior
+```
 
-# Model validation
+# COMPARE the 2 models
+```{r LOOIC values}
+(l.1 <- loo(norin.brms)) # random intercept
+(l.2 <- loo(norin.brms1)) # random intercept random slope
+loo_compare(l.1,l.2)    # compare the LOOIC values
+```
 
-# Model investigation / hypothesis testing
+# VALIDATE models
+# random intercept
+```{r check overdispersion random intercept model}
+preds <- posterior_predict(norin.brms,nsamples=250,summary=FALSE)
+norin.resids <- createDHARMa(simulatedResponse = t(preds),
+                             observedResponse = norin$CHANGE,
+                             fittedPredictedResponse = apply(preds,2,median))
+plot(norin.resids)
+```
+# random intercept random slope
+```{r check for overdispersion random intercept random slope model}
+preds1 <- posterior_predict(norin.brms1,nsamples=250,summary=FALSE)
+norin.resids1 <- createDHARMa(simulatedResponse = t(preds1),
+                             observedResponse = norin$CHANGE,
+                             fittedPredictedResponse = apply(preds1,2,median))
+plot(norin.resids1)
 
-# Predictions
+# ok so both models are pretty similar - let's go with this one - the random intercept random slope one brms1
+```
 
-# Summary figures
+# INVESTIGATE model / TEST HYPOTHESES
+```{r quick look at plot}
+# now let's look a bit further at the norin.brms1 model:
+g<-ggpredict(norin.brms1) %>% plot
+# using the patchwork package we can plot them nicely like this:
+g[[1]]+g[[2]]+g[[3]] # graphs beside each other
+g[[1]]/g[[2]]/g[[3]] # graphs below each other
+(g[[1]]+g[[2]])/g[[3]] # first two next to each other, 3rd one below
+g[[1]]/(g[[2]]+g[[3]])
+
+# the old way we were doing:
+do.call('grid.arrange',g)
+```
+```{r}
+nms <- norin.brms1 %>% get_variables()
+head(nms)
+wch <- grep('^bIntercept|TRIAL|^b.*SMR|[sS]igma',nms)
+nms[wch]
+```
+```{r}
+tidyMCMC(norin.brms1$fit,conf.int=TRUE,conf.method='HPDinterval',ess=TRUE,rhat=TRUE, pars=nms[wch],estimate.method='median')
+# confidence interval for 
+```
+```{r}
+norin.em <- emmeans(norin.brms1,pairwise~TRIAL)$contrast %>% 
+  gather_emmeans_draws() %>% 
+  mutate(Fit=.value)
+norin.em %>% group_by(contrast) %>% median_hdi()
+norin.em %>% group_by(contrast) %>% summarize(P=sum(Fit>0)/n())
+
+# prob Hypoxia has a greater change than low salinity is 0.037 (low prob)
+```
+```{r}
+# let's look at min, middle, max SMR
+norin.grid <- with(norin, list(SMR_contr=c(min(SMR_contr),mean(SMR_contr),max(SMR_contr))))
+norin.em <- emmeans(norin.brms1,pairwise~TRIAL|SMR_contr,at=norin.grid)$contrast %>% 
+  gather_emmeans_draws()
+norin.em %>% group_by(contrast,SMR_contr) %>% median_hdi()
+norin.em %>% group_by(contrast,SMR_contr) %>% summarize(P=sum(.value>0)/n())
+# this gives a bit more insight into the trend
+# at minimum SMR evidence that low salinity experiences higher change than hypoxia is 1-0.105=0.9, 
+# at mean SMR evidence that low salinity experiences higher change than hypoxia is 1-0.037=0.97, 
+# at maximum SMR evidence that low salinity experiences higher change than hypoxia is 1-0.353=0.7
+```
+# PREDICT &  PLOT
+```{r}
+# plot model
+norin.new <- emmeans(norin.brms1,~SMR_contr|TRIAL,at=norin.grid) %>% as.data.frame()
+ggplot(norin.new,aes(x=SMR_contr,y=emmean,color=TRIAL))+
+  geom_ribbon(aes(ymin=lower.HPD,ymax=upper.HPD,fill=TRIAL),alpha=0.3,color=NA)+
+  geom_line()+theme_bw()
+```
+```{r r-squared}
+r1 <- bayes_R2(norin.brms1,re.form=NA,summary=FALSE) %>% median_hdi
+r2 <- bayes_R2(norin.brms1,re.form=~(1|FISHID),summary=FALSE) %>% median_hdi
+r3 <- bayes_R2(norin.brms1,re.form=~(SMR_contr|FISHID),summary=FALSE) %>% median_hdi
+rsquared <- c(r1$y,r2$y,r3$y)
+print(rsquared)
+```
 
 # References
