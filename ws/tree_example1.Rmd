@@ -65,10 +65,10 @@ Abalone are an important aquaculture shell fish that are farmed
 for both their meat and their shells.  Abalone can live up to 50 
 years, although their longevity is known to be influenced by a 
 range of environmental factors.  Traditionally, abalone are aged
-by counting thier growth rings, however, this method is very
+by counting their growth rings, however, this method is very
 laborious and expensive.  Hence a study was conducted in which abalone
 growth ring counts were matched up with a range of other more easily
-measured physical characteristics (such as shell dimesions and weights)
+measured physical characteristics (such as shell dimensions and weights)
 in order to see if any of these other parameters could be used as
 proxies for the number of growth rings (or age).
 
@@ -82,8 +82,14 @@ Format of abalone.csv data file
 ```{r readData, results='markdown', eval=TRUE}
 abalone = read_csv('../data/abalone.csv', trim_ws=TRUE)
 glimpse(abalone)
+abalone <- mutate(abalone, SEX=factor(SEX))
+# wanted to see if they could predict abalone age (number of growth rings) from some other abalone metric
 ```
 
+```{r set seed}
+# need to set a random seed (so when you draw a random number it starts from the same spot i.e. the seed that you set)
+set.seed(123)
+```
 
 
 # Exploratory data analysis
@@ -91,19 +97,79 @@ glimpse(abalone)
 
 
 # Fit the model
+```{r fit boosted regression tree model, cache=TRUE}
+abalone.gbm <- gbm(RINGS~SEX+LENGTH+DIAMETER+HEIGHT+WHOLE_WEIGHT+MEAT_WEIGHT+GUT_WEIGHT+SHELL_WEIGHT,
+                   data=abalone,
+                   distribution='poisson',             # specify loess function to use
+                   var.monotone = c(0,1,1,1,1,1,1,1),  # should be as many of these as there are predictors - dictate nature of the trend (here we've for everything except sex variable, as each predictor variable increases, the number of rings can only increase) - if you think the relationship is negative you set to -1, if you're unsure, set it to zero (so we're unsure for sex) - if you don't set it, you're not constraining it and may not be sensible
+                   n.trees = 10000,                    # analogous to the number of knots - set what you think will be excessive amount
+                   interaction.depth=5,                # complexity of each tree, sensible numbers are 3,5,7,9 - i.e. the number of splits - if you think there's a lot of interactions (e.g. 4-way interactions), then increase complexity
+                   bag.fraction=0.5,          # how much data you want to take from the bag each splot
+                   shrinkage=0.01,    # the lower you set, the more trees it will take, range: (0,0.1) - 0.001 is common
+                   train.fraction = 1,   # how much to withhold (we don't want to withhold any so set to 1) - at every split we want to choose from the whole set of data
+                   cv.folds = 3) # how many repeats of the fitting we want it to do
 
-  
 
-
-
+# to determine what the best split is, the metric it uses is called a 'loess' function (can easily calculate) - different loess functions defined for different families but they're not unique
+```
 
 # Model validation
+```{r optimum number of trees - out of bag method}
+(best.iter<-gbm.perf(abalone.gbm,method='OOB')) # dashed line shows optimum number of trees (compromise b/w over-learning & under-learning) - this took 264 trees to optimise fitting
+```
+```{r optimum number of trees - cross validation}
+(best.iter<-gbm.perf(abalone.gbm,method='cv')) # took 380 trees to optimise fitting
+```
 
-# Model investigation / hypothesis testing
+```{r model summary}
+summary(abalone.gbm,n.trees=best.iter) # tells you which variable is most important for the prediction
+
+# how does it calculate this? just adds up the number of times each variable was selected in each split then divide by number of total splits
+
+# so shell_weight is overly influential in the prediction
+
+# rel.inf has to add to 100
+# anything that has relative influence more than 100/8=12.5 is having more of an influence than a random influence 
+# so in this case there's really only one important variable - shell_weight
+```
+ 
+ 
+# Model investigation / hypothesis testing 
+```{r}
+plot(abalone.gbm,8,n.trees=best.iter) # graph shows predicted number of rings from shell_weight (log scale)
+```
+
+```{r plots}
+library(ggfortify)
+library(pdp)
+abalone.gbm %>% pdp::partial(pred.var='SHELL_WEIGHT',n.trees=best.iter,recursive=FALSE,inv.link=exp) %>% 
+  autoplot() # now it's not on a log scale
+
+# the point of this is prediction & to work out what variables are most important
+```
+
+# Random forest method
+
+```{r fit random forest model, cache=TRUE}
+library(randomForest)
+abalone.rf <- randomForest(RINGS~SEX+LENGTH+DIAMETER+HEIGHT+WHOLE_WEIGHT+MEAT_WEIGHT+GUT_WEIGHT+SHELL_WEIGHT,
+                           data=abalone,importance=TRUE,ntree=1000)
+# random forest runs with and without predictors & combination of predictors
+```
+
+```{r}
+abalone.imp <- importance(abalone.rf)
+100*abalone.imp/sum(abalone.imp)
+
+# IncNodePurity
+# previously we said shell_weight influence was really high (80something%), but this one is only saying it's 24% - in boosted tree shellweight was correlated to the others & exaggerated above all others - not the case for random forest 
+# if we go back to that 12.5 cutoff, we would include a lot more variables as influential to the prediction
+
+# no confidence intervals - if you wanted that you bootstrap - run multiple times each with subset of your data - get a curve for each time you run it and then you have a confidence interval
+```
+
+```{r plot}
+abalone.rf %>% partial('SHELL_WEIGHT') %>% autoplot()
+```
 
 
-
-
-# Predictions
-
-# Summary figures
