@@ -71,6 +71,16 @@ Someone did something for some reason.....
 ```{r readData, results='markdown', eval=TRUE}
 owls = read_csv('../data/owls.csv', trim_ws=TRUE)
 glimpse(owls)
+owls <- mutate(owls,Nest=factor(Nest),FoodTreatment=factor(FoodTreatment),SexParent=factor(SexParent),NCalls=SiblingNegotiation) # to rename instead of add on extra variable use 'rename' function
+# number of negotations that owl chicks make - calls - so response is count data (Poisson? or negBinomial)
+# factor for Brood size??
+
+
+# TOP LEVEL: Nests - random level effect
+# what things vary within the nest, what things vary between the nest
+# NEXT LEVEL: FoodTreatment - each nest had both treatments
+# Arrival Time - just recorded the time - continuous variable - measured multiple times per nest 
+# BroodSize is covariate - to standardise number of calls for brood size - include it as an offset so no parameters are estimated for it - assume 1:1 relationship
 ```
 
 
@@ -87,7 +97,177 @@ and $\bf{X}$ is the model matrix representing the overall intercept and effects 
 Brood size was also incorporated as an offset.
 $\bf{Z}$ represents a cell means model matrix for the random intercepts associated with individual nests.
 
-# Fit the model
+```{r exploratory plots}
+# NCalls as a function of ArrivalTime coloured by FoodTreatment with a smoother added in to just visualise any trend
+ggplot(owls,aes(y=NCalls,x=ArrivalTime,color=FoodTreatment))+
+  geom_point()+geom_smooth(method='lm')+theme_bw()
+
+# NCalls as a function of ArrivalTime coloured by FoodTreatment & separate graph for each nest 
+ggplot(owls,aes(y=NCalls,x=ArrivalTime,color=FoodTreatment))+
+  geom_point()+geom_smooth(method='lm')+
+  facet_wrap(~Nest)+theme_bw()
+
+ggplot(owls,aes(y=NegPerChick,x=ArrivalTime,color=FoodTreatment))+
+  geom_point()+geom_smooth(method='lm')+
+  facet_wrap(~Nest,scale='free_y')+
+  theme_bw()
+
+# ok so might want to fit a random slope & random slope random intercept model
+
+
+# NCalls~FoodTreatment+scale(ArrivalTime)+offset(log(BroodSize))+(1|Nest)
+# NCalls~FoodTreatment+scale(ArrivalTime)+offset(log(BroodSize))+(FoodTreatment|Nest)??
+```
+
+# FIT model owls.brmsP
+```{r fit poisson model, cache=TRUE}
+owls.form <- bf(NCalls~FoodTreatment+scale(ArrivalTime)+offset(log(BroodSize))+(1|Nest),family=poisson(link='log'))
+# NB: scaling continuous variables speed up analyses
+owls.brmsP <- brm(owls.form,data=owls,iter=5000,warmup=2000,chains=3,refresh=0,thin=5)
+```
+
+# VALIDATE model owls.brmsP
+```{r chain characteristics}
+mcmc_plot(owls.brmsP,type='trace')      #
+mcmc_plot(owls.brmsP,type='acf_bar')    # autocorrelation
+mcmc_plot(owls.brmsP,type='neff_hist')  # number of effectives
+mcmc_plot(owls.brmsP,type='rhat_hist')  # chain convergence
+```
+
+```{r test for overdispersion}
+preds <- posterior_predict(owls.brmsP,nsamples=250,summary=FALSE)
+owls.resids <- createDHARMa(simulatedResponse = t(preds),
+                             observedResponse = owls$NCalls,
+                             fittedPredictedResponse = apply(preds,2,median))
+plot(owls.resids) # BAHH this is NOT good - we have overdispersion (not uncommon for Poisson distributions) & outliers 
+# could be overdispersed because model is too simplistic
+# could be overdispersed because of zero inflation
+```
+```{r test for zeroinflation}
+#  test for zero inflation
+testZeroInflation(owls.resids) # yep there's a problem here with zero inflation => can account for this with Negative Binomial BUT this dataset has A LOT of zeros so we suspect Negative Binomial won't be able to handle this - instead we try a zero Inflation model 
+```
+
+# RE-FIT model owls.brmsZIP
+```{r fit zero inflated poisson model, cache=TRUE}
+owls.form1 <- bf(NCalls~FoodTreatment+scale(ArrivalTime)+offset(log(BroodSize))+(1|Nest), # count process - counts that it                                                                                              thinks are true
+                 zi~1,                                                                    # detection process (can I detect                                                                                             or not)
+                 family=zero_inflated_poisson(link='log'))
+# zi~ 1 - not modelling any reasoning into my ability to detect - you could model zero inflation based on something like ArrivalTime or something else e.g. zi~scale(ArrivalTime) - this is unlikely to help the model run better in this case 
+owls.brmsZIP <- brm(owls.form1,data=owls,iter=5000,warmup=2000,chains=3,refresh=0,thin=10)
+```
+
+# VALIDATE model owls.brmsZIP
+```{r check chain characteristics}
+mcmc_plot(owls.brmsZIP,type='trace')      #
+mcmc_plot(owls.brmsZIP,type='acf_bar')    # autocorrelation
+mcmc_plot(owls.brmsZIP,type='neff_hist')  # number of effectives
+mcmc_plot(owls.brmsZIP,type='rhat_hist')  # chain convergence
+```
+
+```{r test for overdispersion}
+preds <- posterior_predict(owls.brmsZIP,nsamples=250,summary=FALSE)
+owls.resids <- createDHARMa(simulatedResponse = t(preds),
+                             observedResponse = owls$NCalls,
+                             fittedPredictedResponse = apply(preds,2,median))
+plot(owls.resids) # this is still not great..... so overdispersion probably needs to be dealt with negative binomial as well as zero inflation - so let's try fit a zero inflated negative binomial
+```
+# RE-FIT model owls.brmsZINB
+```{r fit zero inflated negative binomial model, cache=TRUE}
+owls.form2 <- bf(NCalls~FoodTreatment+scale(ArrivalTime)+offset(log(BroodSize))+(1|Nest), 
+                 zi~scale(ArrivalTime),                                                                    
+                 family=zero_inflated_negbinomial(link='log'))
+owls.brmsZINB <- brm(owls.form2,data=owls,iter=5000,warmup=2000,chains=3,refresh=0,thin=10)
+```
+
+# VALIDATE model owls.brmsZINB
+```{r check chain characteristics}
+mcmc_plot(owls.brmsZINB,type='trace')      #
+mcmc_plot(owls.brmsZINB,type='acf_bar')    # autocorrelation
+mcmc_plot(owls.brmsZINB,type='neff_hist')  # number of effectives
+mcmc_plot(owls.brmsZINB,type='rhat_hist')  # chain convergence
+```
+
+```{r test for overdispersion}
+preds <- posterior_predict(owls.brmsZINB,nsamples=250,summary=FALSE)
+owls.resids <- createDHARMa(simulatedResponse = t(preds),
+                             observedResponse = owls$NCalls,
+                             fittedPredictedResponse = apply(preds,2,median))
+plot(owls.resids) # this is STILL bad - so let's try adding in a random slope to increase the complexity of the model - maybe that will help 
+```
+
+# RE-FIT model owls.brmsZINB1
+```{r fit zero inflated negative binomial model random intercept random slope, cache=TRUE}
+# let's change the model one more time adding in random slope to see if that helps (i.e. the model might be too simple)
+owls.form3 <- bf(NCalls~FoodTreatment+scale(ArrivalTime)+offset(log(BroodSize))+(scale(ArrivalTime)|Nest),  
+                 zi~scale(ArrivalTime),                                                                    
+                 family=zero_inflated_negbinomial(link='log'))
+# you could do ((FoodTreatment+scale(ArrivalTime))|Nest) if you thought that was pattern with foodtreatment also, but it take a lot longer - depends on your exploratory plot what sort of patterns you were seeing
+owls.brmsZINB1 <- brm(owls.form3,data=owls,iter=5000,warmup=2000,chains=3,refresh=0,thin=10)
+```
+
+# VALIDATE model owls.brmsZINB1
+```{r test for overdispersion}
+preds <- posterior_predict(owls.brmsZINB1,nsamples=250,summary=FALSE)
+owls.resids <- createDHARMa(simulatedResponse = t(preds),
+                             observedResponse = owls$NCalls,
+                             fittedPredictedResponse = apply(preds,2,median))
+plot(owls.resids) # this is STILL bad - so let's try adding in a random slope to increase the complexity of the model - maybe that will help 
+```
+
+
+# RE-FIT model owls.brmsZINB2
+```{r fit zero inflated negative binomial model random intercept random slope, cache=TRUE}
+# let's change the model one more time by adding in an interaction to see if that helps
+owls.form4 <- bf(NCalls~FoodTreatment*scale(ArrivalTime)+offset(log(BroodSize))+(scale(ArrivalTime)|Nest),  
+                 zi~scale(ArrivalTime),                                                                    
+                 family=zero_inflated_negbinomial(link='log'))
+owls.brmsZINB2 <- brm(owls.form4,data=owls,iter=5000,warmup=2000,chains=3,refresh=0,thin=10)
+```
+
+# VALIDATE model owls.brmsZINB2
+```{r test for overdispersion}
+preds <- posterior_predict(owls.brmsZINB2,nsamples=250,summary=FALSE)
+owls.resids <- createDHARMa(simulatedResponse = t(preds),
+                             observedResponse = owls$NCalls,
+                             fittedPredictedResponse = apply(preds,2,median))
+plot(owls.resids) # this will have to do - at some point you have to be ok with perhaps some small issues as it probably won't make much difference to your conclusions 
+```
+
+# INVESTIGATE MODEL / TEST HYPOTHESES
+```{r model summary}
+# ok so we've chosen owls.brmsZINB2 as the model to proceed with - let's have a look at it a bit further:
+tidyMCMC(owls.brmsZINB2$fit,conf.int=TRUE,conf.method='HPDinterval',rhat=TRUE,ess=TRUE)
+
+
+# EXAMPLE INTERPRETATIONS OF MODEL SUMMARY RESULTS:
+# b_zi_Intercept average NCalls (on log scale) for the deprived group at the average Arrival Time (& obviously averaged over the nests)
+# b_FoodTreatmentSatiated	-0.274280665	: satiated chicks call less (conf interval indicates this difference is significant - so food treatment seems to have an effect)
+
+#b_zi_scaleArrivalTime	0.336646073 - the chance of false zeros increases as arrival time increases - and this seems to be significant - more & more zeros as arrival time increased - & more and more of them you would consider as false zeros 
+```
+
+```{r plot model by making predictions first}
+ggpredict(owls.brmsZINB2) %>% plot
+
+owls.grid <- with(owls,list(FoodTreatment=levels(FoodTreatment),ArrivalTime=seq(min(ArrivalTime),max(ArrivalTime),len=100)))
+owls.new <- emmeans(owls.brmsZINB2,~ArrivalTime|FoodTreatment,at=owls.grid,type=
+                      'response') %>% as.data.frame()
+head(owls.new)
+```
+```{r plot}
+ggplot(owls.new,aes(x=ArrivalTime,y=prob))+
+  geom_line(aes(color=FoodTreatment))+
+  geom_ribbon(aes(ymin=lower.HPD,ymax=upper.HPD,fill=FoodTreatment),alpha=0.2)+
+  theme_bw()
+# based on our graph, it seems like the satiated group were fairly consistent with NCalls over time, whereas deprived group called substantially more than satiated groups at low Arrival Time
 
 
 
+emmeans(owls.brmsZINB2,~ArrivalTime|FoodTreatment)
+
+
+# all in all this was quite a complicated example
+```
+
+# References

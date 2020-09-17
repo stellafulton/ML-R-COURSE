@@ -71,6 +71,7 @@ Someone did something for some reason.....
 ```{r readData, results='markdown', eval=TRUE}
 mckeon = read_csv('../data/mckeon.csv', trim_ws=TRUE)
 glimpse(mckeon)
+mckeon <- mutate(mckeon, SYMBIONT=factor(SYMBIONT,levels=c('none','crabs','shrimp','both')),BLOCK=factor(BLOCK))
 ```
 
 
@@ -86,15 +87,121 @@ where $\boldsymbol{\beta}$ and $\boldsymbol{\gamma}$ are vectors of the fixed an
 and $\bf{X}$ is the model matrix representing the overall intercept and effects of symbionts on the probability of the colony experiencing predation.
 $\bf{Z}$ represents a cell means model matrix for the random intercepts associated with individual coral colonies.
 
-# Fit the model
+# EXPLORE data with PLOT
+```{r exploratory plot}
+ggplot(mckeon,aes(x=SYMBIONT,y=PREDATION))+
+  geom_point()+
+  facet_wrap(~BLOCK)
+```
+## random intercept
+# FIT model
+```{r fit bayesian hierarchical (additive random intercept) model,cache=TRUE}
+mckeon.form <- bf(PREDATION|trials(1)~SYMBIONT+(1|BLOCK),family=binomial(link='logit'))
+mckeon.brms <- brm(mckeon.form,data=mckeon,iter=5000,chains=3,warmup=2000,thin=5,refresh=0)
+#data is binary
+```
+
+# VALIDATE MODEL
+```{r check chain characteristics}
+mckeon.brms.var <- get_variables(mckeon.brms)
+mcmc_plot(mckeon.brms,type='trace',pars=mckeon.brms.var[1:5])     # check trace plots
+mcmc_plot(mckeon.brms,type='acf_bar',pars=mckeon.brms.var[1:5])   # check autocorrelation
+mcmc_plot(mckeon.brms,type='neff_hist',pars=mckeon.brms.var[1:5]) # check effective samples
+mcmc_plot(mckeon.brms,type='rhat_hist',pars=mckeon.brms.var[1:5]) # check chain convergence
+
+# plots all look good so chains are well mixed and have converged on a stable posterior
+```
+```{r check overdispersion}
+preds <- posterior_predict(mckeon.brms,nsamples=250,summary=FALSE)
+mckeon.resids <- createDHARMa(simulatedResponse = t(preds),
+                             observedResponse = mckeon$PREDATION,
+                             fittedPredictedResponse = apply(preds,2,median))
+plot(mckeon.resids)
+
+# slight issue of overdispersion: dispersion test p=0.032 (i.e. <0.05)
+# residual plot of box plots: we want to see boxes that are symmetrical around the middle
+
+# dispersion with binomial distribution - NOT easy to deal with => beta binomial (mixture) is able to model the variance rather than assume it, however because it does rely on the beta part it requires more data - with this dataset it's probably not big enough to fit a model using beta binomial
+
+# if you have a large data set & a problem with overdispersion when fitting a binomial, you should try a beta binomial
+
+# the other reason it could be overdispersed is that the model is too simple - so perhaps try a random intercept random slope model
+```
+## random intercept random slope
+# FIT model
+```{r fit random intercept, random slope model, cache=TRUE}
+mckeon.form1 <- bf(PREDATION|trials(1)~SYMBIONT+(SYMBIONT|BLOCK),family=binomial(link='logit'))
+mckeon.brms1 <- brm(mckeon.form1,data=mckeon,iter=5000,chains=3,warmup=2000,thin=10,refresh=0,control=list(adapt_delta=0.99))
+# whenever you include a random slope for a categorical it will take a lot longer to run
+
+# 6 divergent transitions but that's ok for the number of samples it did
+```
+# VALIDATE model
+```{r check chain characteristics}
+mckeon.brms.var1 <- get_variables(mckeon.brms1)
+mcmc_plot(mckeon.brms1,type='trace',pars=mckeon.brms.var1[1:14])     # check trace plots
+mcmc_plot(mckeon.brms1,type='acf_bar',pars=mckeon.brms.var1[1:14])   # check autocorrelation
+mcmc_plot(mckeon.brms1,type='neff_hist',pars=mckeon.brms.var1[1:14]) # check effective samples
+mcmc_plot(mckeon.brms1,type='rhat_hist',pars=mckeon.brms.var1[1:14]) # check chain convergence
+
+# looks good now
+```
+
+```{r check overdispersion}
+preds <- posterior_predict(mckeon.brms1,nsamples=250,summary=FALSE)
+mckeon.resids <- createDHARMa(simulatedResponse = t(preds),
+                             observedResponse = mckeon$PREDATION,
+                             fittedPredictedResponse = apply(preds,2,median))
+plot(mckeon.resids)
+
+# yep overdispersion issue has been fixed now! wooo
+```
 
 
-# Model validation
+# INVESTIGATE model / TEST HYPOTHESES
+```{r}
+ggpredict(mckeon.brms1) %>% plot
+```
+```{r model summary}
+tidyMCMC(mckeon.brms1$fit,conf.int=TRUE,conf.method='HPDinterval',ess=TRUE,rhat=TRUE)
 
-# Model investigation / hypothesis testing
+# seems like chance of being predated is lower when both symbionts compared to none
+```
+```{r planned comparisons}
+# how about some planned comparisons via emmeans?
+emmeans(mckeon.brms1,pairwise~SYMBIONT,type='response') # because we're on a log odds scale we need to convert back to response scale 
 
-# Predictions
+# example interpretation of these results: the odds of being predated on are 21 times higher for none group than crab group
+# remember : odds are (p/(1-p))
+```
 
-# Summary figures
+```{r planned comparisons expressed on response scale}
+# alright so what about probabilities?
+mckeon.em <- emmeans(mckeon.brms1,pairwise~SYMBIONT,type='link')$contrasts %>% 
+  gather_emmeans_draws() %>%  # i.e. don't summarise yet to medians & HPDs
+  mutate(PEff=exp(.value)) # now we do the back transform ourselves by adding a new variable PEff (the backtransformed results)
+mckeon.em %>% group_by(contrast) %>% dplyr::select(contrast,PEff) %>% median_hdi
+mckeon.em %>% group_by(contrast) %>% dplyr::select(contrast,PEff) %>%summarise(P=sum(PEff>1)/n())
 
+
+mckeon.em1 <-emmeans(mckeon.brms1,~SYMBIONT,type='link') %>% gather_emmeans_draws()
+head(mckeon.em1) # .value column is on log odds scale - estimate of each mean 
+mckeon.em1 %>% mutate(P=plogis(.value)) %>% head # the P column now represents probabilities (P(predation))
+# plogis converts log odds scale to a probability scale
+
+mckeon.em1 %>% mutate(P=plogis(.value)) %>% median_hdci(P) # so this tells us the probabilities of being predated on for each symbiont
+
+
+# hdi = highest density interval (tries to find quantiles - but if it's bimodal - will give two difference confidence ribbons)
+# hdci = highest density central interval - gives the central one
+```
+
+
+# PREDICT & PLOT using model
+```{r}
+mckeon.em1.plot <- mckeon.em1 %>% mutate(P=plogis(.value)) %>% median_hdci(P)
+ggplot(mckeon.em1.plot,aes(x=SYMBIONT,y=P))+
+  geom_pointrange(aes(ymin=.lower,ymax=.upper),color='black')+
+  theme_bw()
+```
 # References

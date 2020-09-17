@@ -94,11 +94,43 @@ tree        Jan     85     tree1
 ```{r readData, results='markdown', eval=TRUE}
 starling = read_csv('../data/starling_full.csv', trim_ws=TRUE)
 glimpse(starling)
+# body mass changes of starlings b/w start (Nov) & end (Jan) of breeding season depending on where they nested (tree, nest-box, inside, other)
+# nested design - each bird acts as their own control - blocking design 
+# often refer to this as a repeated measures design - assume can't account for time ordering so account for temporal autocorrelation (Bird 1 measured in Nov & Jan, Bird 2 measured in Nov & Jan)
+
+# TREE            NEST BOX       (between block effects)
+# BIRD1           BIRD 2
+# Nov , Jan       Nov , Jan      (within block effects)
+
+starling <- mutate(starling, MONTH=factor(MONTH, levels=c('Nov','Jan')),SITUATION=factor(SITUATION),BIRD=factor(BIRD))
+# perhaps should do Jan before Nov,
+
+# could try  y ~ situation * month + (1 | bird)
+# OR try     y ~ situation * month + (month | bird)
+# doing   y ~ situation * month + (situation | bird) would not be sensible because situation can't change for each bird
+# unit of replication are the birds
+
+# response variable: body mass - integers - normal
+
+# WHAT TO WRITE IN METHODS SECTION OF PAPER:
+# the effects of roosting situation on starling mass changes were explored using bayesian hierarchical (mixed effects) modelling
+# specifically, the model included effects of roosting situation and month and their interaction, as well as the random effects / varying effects of bird were added to account for the dependency structure ...
+# OR: specifically, the model included the multiplicative effects of situation and month, as well as the random effects / varying effects of bird were added to account for the dependency structure 
+# each of 3 MCMC chains contained 5000 iterations, with a warmup/burnin of 2000, thinned to a rate of 5
+# trace plots and r-hat values (all <1.05) indicated that the chains were well mixed and converged on a stable posterior
+# you might say something about planned comparisons - subsequently the pairwise differences between situations were compared from the posterior (i.e. something that indicates that you've done all the pairwise comparisons)
+# models were fit using the brms package (i.e. acknowledge what package you used to fit the model & cite it) in the R statistical and graphical environment (cite R)
 ```
 
 # Exploratory data analysis
 
 Model formula:
+This is where you indicate what the priors were that you were using
+the gammaZi refers to the random effects (intercept of each bird & overall intercept - how each bird differs from overall intercept i.e. the average) - these will sum to zero
+betas are often for fixed effects, gammas are often for random effects
+the gamma = gamma0 is just how you write (1|BIRD)
+if random intercept random slope then gamma = gamma0 + zetaXi
+and then what's below is specifying the priors - get this from R and enter in 
 $$
 y_i \sim{} \mathcal{N}(\mu_i, \sigma^2)\\
 \mu_i = \beta_0 + \boldsymbol{\beta} \bf{X_i} + \boldsymbol{\gamma} \bf{Z_i}\\
@@ -114,15 +146,154 @@ where $\boldsymbol{\beta}$ and $\boldsymbol{\gamma}$ are vectors of the fixed an
 and $\bf{X}$ is the model matrix representing the overall intercept and effects of roosting situation and month on starling mass.
 $\bf{Z}$ represents a cell means model matrix for the random intercepts associated with individual birds.
 
-# Fit the model
+```{r exploratory box plots}
+head(starling)
+ggplot(starling,aes(x=SITUATION,y=MASS,color=MONTH))+
+  geom_boxplot()
+# test assumptions of normal (gaussian distribution) - look pretty good - not skewed
 
+
+# or could do exploratory plot like this:
+ggplot(starling, aes(x=MONTH,y=MASS))+
+  geom_point(aes(color=SITUATION))+
+  geom_line(aes(x=as.numeric(MONTH)))+
+  facet_wrap(~BIRD)
+```
+
+
+# Fit the model
+```{r fit bayesian random intercept model, cache=TRUE}
+# random intercept model
+starling.form <- bf(MASS~MONTH*SITUATION+(1|BIRD),family=gaussian)
+starling.brms <- brm(starling.form,data=starling,iter=5000,warmup=2000,chains=3,refresh=0,thin=5)
+```
+
+```{r fit bayesian random intercept random slope model,cache=TRUE}
+# random intercept random slope model
+starling.form1 <- bf(MASS~SITUATION*MONTH+(MONTH|BIRD),family=gaussian)
+starling.brms1 <- brm(starling.form1,data=starling,iter=5000,warmup=2000,chains=3,refresh=0,thin=5,control=list(adapt_delta=0.99))
+```
 
 # Model validation
+```{r}
+# random intercept model
+sms <- starling.brms %>% get_variables()
+# you can just ask for the first few ones instead of doing regex
+mcmc_plot(starling.brms,type='trace',pars=sms[1:10])
+mcmc_plot(starling.brms,type='trace',regex_pars='^b.Intercept|^b.SITUATION|^b.MONTH|MASS|[sS]igma|sd') # trace plots
+mcmc_plot(starling.brms,type='acf_bar',regex_pars='^b.Intercept|SITUATION|MONTH|MASS|[sS]igma|^sd') # autocorrelaiton
+mcmc_plot(starling.brms,type='neff_hist') # effective samples
+mcmc_plot(starling.brms,type='rhat_hist') # chain convergence
+
+# this all looks good
+```
+
+```{r}
+# random intercept random slope model
+starling.brms1 %>% get_variables()
+mcmc_plot(starling.brms1,type='trace',regex_pars='^b.Intercept|SITUATION|MONTH|MASS|[sS]igma|^sd') # trace plots
+mcmc_plot(starling.brms1,type='acf_bar',regex_pars='^b.Intercept|SITUATION|MONTH|MASS|[sS]igma|^sd') # autocorrelation - ohhh this doesn't look good
+mcmc_plot(starling.brms1,type='neff_hist') # effective samples
+# this doesn't look good either
+mcmc_plot(starling.brms1,type='rhat_hist',regex_pars='^b.Intercept|SITUATION|MONTH|MASS|[sS]igma|^sd') # chain convergence
+```
+
+```{r LOOIC values}
+# not much point comparing these because the random intercept and random slope model didn't even work so can't compare a model that ran well and a model that didn't run weel
+# so don't do this unless you've got two models that ran well (chains converged etc. etc.)
+(l.1 <- loo(starling.brms))
+#looic	468.4	
+
+(l.2 <- loo(starling.brms1))
+#looic	464.7	
+```
+```{r test overdispersion for random intercept model}
+preds <- posterior_predict(starling.brms,nsamples=250,summary=FALSE)
+starling.resids <- createDHARMa(simulatedResponse = t(preds),
+                             observedResponse = starling$MASS,
+                             fittedPredictedResponse = apply(preds,2,median))
+plot(starling.resids)
+```
+```{r test random intercept random slope model as well}
+preds1 <- posterior_predict(starling.brms1,nsamples=250,summary=FALSE)
+starling.resids1 <- createDHARMa(simulatedResponse = t(preds1),
+                             observedResponse = starling$MASS,
+                             fittedPredictedResponse = apply(preds,2,median))
+plot(starling.resids1)
+# not much difference so stick with random intercept model
+```
 
 # Model investigation / hypothesis testing
+```{r}
+g.starl <- ggpredict(starling.brms) %>% plot
+do.call('/',g.starl)
+
+ggemmeans(starling.brms,~SITUATION|MONTH) %>% plot # this basically combines the ggpredict plots onto the one plot
+
+sms <- starling.brms %>% get_variables()
+head(sms)
+ss <- grep('^b.Intercept|^b.MONTH|^b.SITUATION|sigma|sd',sms)
+sms[ss]
+
+tidyMCMC(starling.brms$fit,conf.int=TRUE,conf.method='HPDinterval',ess=TRUE,rhat=TRUE, pars=sms[ss],estimate.method='median')
+
+levels(starling$SITUATION) # "inside"   "nest-box" "other"    "tree"   
+
+# reef / site / transect (all random effect)
+# (Reef/Site) OR (1|Reef)+(1|Site)
+
+# difference b/w inside (higher mass) & other (lower mass) - significant
+# difference b/w Jan & Nov significant
+
+# all the conf intervals for the interactions contain zero so doesn't seem to be much of a difference - so could've gotten away with an additive model
+```
 
 # Predictions
 
+```{r}
+# since there doesn't seem to be an interaction - it'd be good to know the difference b/w months across all situations
+emmeans(starling.brms,pairwise~MONTH)
+# on average across all situations there's a 9.08g difference b/w Nov & Jan (so they gain 9.08g going from Nov to Jan on average across all situations)
+
+# difference b/w months for each situation
+emmeans(starling.brms,pairwise~MONTH|SITUATION)$contrast 
+```
+
+```{r}
+# what about probabilities??? express effect sizes as percentages:
+starling.em <- emmeans(starling.brms,~MONTH|SITUATION) %>% 
+  gather_emmeans_draws() %>% 
+  spread(key=MONTH,value=.value) %>% 
+  mutate(Eff=Jan-Nov,PEff=100*(Jan-Nov)/Nov) %>% ungroup # ungroup in case it's grouping by more than just situation
+  
+starling.em %>% dplyr::select(SITUATION,Eff,PEff) %>% group_by(SITUATION) %>% summarize(Prob=sum(PEff>10)/n())
+
+# so the probability that there's a more than 10% increase in mass from Nov to Jan is 0.82 for inside, 0.93 for nest-box, 0.75 for other, 0.28 for tree - so fairly significant for inside & nest-box
+
+# IN RESULTS:
+# plot showing model differences in mass for each month for each situation: ggemmeans(starling.brms,~SITUATION|MONTH) %>% plot 
+# caterpillar plot - difference b/w months for each situation
+# would state there was a difference in months for each situation - could quote numbers  e.g. on average across all situations the mass change from Nov to Jan was weight gain by 9.08g - put in conf. credibility intervals too
+# or you might be focused on the probabilities 
+# i.e. don't necessarily need to put tables in, but you would if you didn't put a caterpillar plot in
+```
+
 # Summary figures
+```{r}
+
+starling.em <- emmeans(starling.brms,~MONTH|SITUATION) %>% 
+  gather_emmeans_draws() %>% 
+  spread(key=MONTH,value=.value) %>% 
+  mutate(Eff=Jan-Nov,PEff=100*(Jan-Nov)/Nov) %>% ungroup # ungroup in case it's grouping by more than just situation
+  
+starling.em %>% dplyr::select(SITUATION,Eff,PEff) %>% group_by(SITUATION) %>% summarize(Prob=sum(PEff>10)/n())
+
+
+starling.new <- emmeans(starling.brms,~MONTH|SITUATION) %>% as.data.frame()
+head(starling.new)
+ggplot(starling.new,aes(x=MONTH,y=emmean,color=SITUATION))+
+  geom_pointrange(aes(ymin=lower.HPD,ymax=upper.HPD),position=position_dodge(width=0.3))+
+  theme_bw()
+```
 
 # References

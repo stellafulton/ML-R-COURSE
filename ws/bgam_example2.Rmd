@@ -96,10 +96,19 @@ Year Stilt.Oahu Stilt.Maui Coot.Oahu Coot.Maui Moorhen.Kauai Rainfall
 ```{r readData, results='markdown', eval=TRUE}
 reed = read_csv('../data/reed.csv', trim_ws=TRUE)
 glimpse(reed)
+
+# back to the moorhens! temporal patterns in moorhen populations - so temporal autocorrelation of the data is something we will have to thin about 
+
+# no random effects, no categorical variables
+
+# response = number of Moorhens => Poisson reasonable starting point
+# predictor = Year
+# rainfall could be a covariate
+
+# cool, now we have a handle of what the data is - let's fit a model! we're going to do a generalised additive model
 ```
 
 # Exploratory data analysis
-
 Model formula:
 $$
 y_i \sim{} \mathcal{Pois}(\lambda_i)\\
@@ -108,6 +117,84 @@ $$
 
 where $\beta_0$ is the y-intercept. $f(Year)$ and $f(Rainfall)$ indicate the additive smoothing functions of Year and Rainfall respectively. 
 
+```{r exploratory plot}
+reed %>% head
+ggplot(reed,aes(x=Year,y=Moorhen.Kauai))+
+  geom_point()+
+  geom_smooth()
+```
 
-# Fit the model
+# FIT model
+```{r}
+reed.form <- bf(Moorhen.Kauai~s(Year,bs='cr')+s(Rainfall, bs='cr'),family=poisson(link='log'))
+reed.brmsP <- brm(reed.form,data=reed,sample_prior=TRUE,iter=5000,warmup=2000,chains=3,thin=5,refresh=0,cores=3)
+
+
+# Moorhen.Kauai~s(Year,bs='cr')+s(Rainfall, bs='cr') - bs = basis function, cr = cubic regression (simplest regression), number of knots is free - we haven't defined it
+
+# actually uses mgcv - turns one vector into however many it needs to describe the spline - then runs through bayesian analysis
+```
+
+# VALIDATE model
+```{r check chain characteristics}
+mcmc_plot(reed.brmsP,type='trace')      #
+mcmc_plot(reed.brmsP,type='acf_bar')    # autocorrelation     
+mcmc_plot(reed.brmsP,type='neff_hist')  # number of effectives
+mcmc_plot(reed.brmsP,type='rhat_hist')  # chain convergence
+```
+```{r test for overdispersion}
+preds <- posterior_predict(reed.brmsP,nsamples=250,summary=FALSE)
+reed.resids <- createDHARMa(simulatedResponse = t(preds),
+                             observedResponse = reed.brmsP$data$Moorhen.Kauai,
+                             fittedPredictedResponse = apply(preds,2,median))
+plot(reed.resids) # this doesn't look good - overdispersion & extreme outliers - OH NO! what shall we do? how about our trusty friend Negative Binomial 
+
+# with GAMS - we often fit bayesian models because we can't fit frequentist & because you want to frame conclusions in a different way BUT for GAMS bayesian isn't as evolved
+
+# NB - there were missing values in our dataset (some years they didn't count Moorhens - so put reed.brmsP$data$MoorhenKauai to call from the model rather than the original dataset
+```
+
+```{r test for zero inflation}
+# just check for zero inflation to be sure:
+testZeroInflation(reed.resids) # nup no issues here, so we reckon Negative Binomial will be able to account for the overdispersion
+```
+
+# RE-FIT model - negative binomial
+```{r negative binomial, cache=TRUE}
+reed.form1 <- bf(Moorhen.Kauai~s(Year,k=20,bs='cr')+s(Rainfall, bs='cr'),family=negbinomial(link='log'))
+reed.brmsNB <- brm(reed.form1,data=reed,sample_prior=TRUE,iter=10000,warmup=5000,chains=3,thin=5,refresh=0,cores=3,control=list(adapt_delta=0.99))
+```
+
+# VALIDATE model
+```{r test for overdispersion}
+preds <- posterior_predict(reed.brmsNB,nsamples=250,summary=FALSE)
+reed.resids <- createDHARMa(simulatedResponse = t(preds),
+                             observedResponse = reed.brmsP$data$Moorhen.Kauai,
+                             fittedPredictedResponse = apply(preds,2,median))
+plot(reed.resids) # looking better - let's go with that
+```
+
+# INVESTIGATE model
+```{r}
+conditional_smooths(reed.brmsNB) %>% plot # centered on 0 & on log scale (the link scale)
+```
+
+```{r}
+reed.new <- with(reed,data.frame(Year=seq(min(Year,na.rm=TRUE),max(Year,na.rm=TRUE),len=100),Rainfall=mean(Rainfall)))
+# na.rm=TRUE - should put this in if there's missing values in your dataset
+# can't use our trusty friend emmeans for gams so we need to calculate our predictions a different way:
+reed.new1 <- posterior_epred(reed.brmsNB,reed.new=reed.new) %>%  # predicting for the new data on response scale
+  as.mcmc %>%                              # turning that into an mcmc object - just altering the class of the object
+  tidyMCMC(conf.int=TRUE,conf.method='HPDinterval') %>%     # because tidyMCMC can only take mcmc objects as arguments
+  cbind(reed.new)               # want to bind that together with my x values that i created at the start
+```
+
+```{r}
+ggplot(reed.new1)+
+  geom_ribbon(aes(ymin=conf.low,ymax=conf.high),color='darkblue',alpha=0.3)+
+  geom_line(aes(y=estimate,x=Year))+
+  geom_point(data=reed,aes(y=Moorhen.Kauai,x=Year))
+  theme_bw()
+
+```
 
