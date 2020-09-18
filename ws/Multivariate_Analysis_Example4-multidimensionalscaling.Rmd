@@ -1,0 +1,85 @@
+---
+title: "Multivariate_Analysis_Example4-multidimensionalscaling"
+author: "Stella Fulton"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    code_folding: show
+    collapse: no
+    df_print: paged
+    fig_caption: yes
+    fig_height: 4
+    fig_width: 4
+    highlight: textmate
+    theme: spacelab
+    toc: yes
+    toc_float: yes
+    css: ../resources/style.css
+  pdf_document:
+    df_print: default
+    fig_caption: yes
+    fig_height: 4
+    fig_width: 4
+    highlight: tango
+    latex_engine: xelatex
+    number_sections: yes
+    toc_depth: 2
+  word_document:
+    fig_caption: yes
+    fig_height: 4
+    fig_width: 4
+    highlight: tango
+    toc: yes
+    toc_depth: 2
+output_dir: "docs"
+documentclass: article
+fontsize: 12pt
+mainfont: Arial
+mathfont: LiberationMono
+monofont: DejaVu Sans Mono
+classoption: a4paper
+bibliography: ../resources/references.bib    
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE)
+```
+
+# READ in data
+
+```{r readcsv dune}
+vareveg <- read_csv('../data/vareveg.csv',trim_ws=TRUE)
+vareenv <- read_csv('../data/vareenv.csv',trim_ws=TRUE)
+# distributed across different management practice farms - those farms are biological farming, standard farming, hobby farming, natural management - wanted to see if community types differed across different land management practices
+```
+
+# PREPARE data for input to metaMDS()
+## create bray-curtis dissimilarity matrix from fourth-root transformed wisconsin double standardised data
+
+```{r transform standardise dissimilarity}
+vareenv.dist <- vegdist(wisconsin(vareenv[,-1]^0.25),"bray")
+vareveg.dist <- vegdist(wisconsin(vareveg[,-1]^0.25),"bray")
+```
+
+# PEFORM multi-dimensional scaling
+
+```{r multi-dimensional scaling}
+vareenv.mds <- metaMDS(vareenv.dist,k=2)
+```
+
+# STANDARDISE environmental data (mean 0, std dev 1)
+
+```{r }
+vareenv.std <- decostand(vareenv[,-1],"standardize")
+vareenv.dist <- vegdist(vareenv.std,"euc")
+bioenv(vareveg.dist,vareenv.std) # identifies variables that are likely to be the most important at distinguishing b/w communities
+```
+```{r}
+adonis(vareveg.dist~Ca+Fe+Mn+Baresoil,data=vareenv.std) # results indicate there is evidence for Ca, Fe, Mn having a significant effect on community
+
+
+# didn't extract scores & put through regular linear model test here - you can't do that here
+save(vareveg.dist,file='vareveg.dist.RData') # put this at end of each chunk
+load(file='vareveg.dist.RData') # put this at start of each chunk
+```
+

@@ -22,7 +22,7 @@ library(ggplot2)
 
 Bla bla (see Figure \@ref(fig:BODfig)).
 
-(ref:fig-cap) Biochemical oxygen demand
+(ref:fig-cap) Biochemical oxygen demand # this is how you refer to a figure that you've created in R using figure caption etc. etc. - need to be bookdown format - see headers at start of markdown
 
 ```{r BODfig, echo=FALSE, out.width='60%', fig.cap='(ref:fig-cap)'}
 ggplot(BOD) +

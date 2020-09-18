@@ -1,0 +1,95 @@
+---
+title: "Multivariate_Analysis_Example3-multidimensionalscaling"
+author: "Stella Fulton"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    code_folding: show
+    collapse: no
+    df_print: paged
+    fig_caption: yes
+    fig_height: 4
+    fig_width: 4
+    highlight: textmate
+    theme: spacelab
+    toc: yes
+    toc_float: yes
+    css: ../resources/style.css
+  pdf_document:
+    df_print: default
+    fig_caption: yes
+    fig_height: 4
+    fig_width: 4
+    highlight: tango
+    latex_engine: xelatex
+    number_sections: yes
+    toc_depth: 2
+  word_document:
+    fig_caption: yes
+    fig_height: 4
+    fig_width: 4
+    highlight: tango
+    toc: yes
+    toc_depth: 2
+output_dir: "docs"
+documentclass: article
+fontsize: 12pt
+mainfont: Arial
+mathfont: LiberationMono
+monofont: DejaVu Sans Mono
+classoption: a4paper
+bibliography: ../resources/references.bib    
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE)
+```
+
+# Multidimensional scaling example
+
+# READ in data
+
+```{r readcsv dune}
+dune <- read.csv('data/dune.csv',strip.white=TRUE)
+# distributed across different management practice farms - those farms are biological farming, standard farming, hobby farming, natural management - wanted to see if community types differed across different land management practices
+```
+
+
+# PREPARE data for input to metaMDS()
+# create dissimilarity matrix from fourth-root transformed wisconsin double standardised data
+```{r}
+dune.dist <- vegdist(wisconsin(dune[,-1]^0.25),"bray")
+```
+
+# PEFORM multi-dimensional scaling
+```{r multi-dimensional scaling}
+dune.mds <- metaMDS(dune.dist,k=2)
+dune.mds$stress # stress 0.1 < 0.2 => we're good to go!
+plot(dune.mds,type="text",display="sites")
+
+# re-attach species names (we thought we couldn't do this but we can with wascores - woo hoo!)
+dune.mds$species <- wascores(dune.mds$points,dune[,-1],expand=TRUE)
+```
+```{r ordination plot}
+pl <- ordiplot(dune.mds,type="none")
+points(pl,"sites",pch=21,col="red",bg="yellow")
+text(pl,"species",col="blue",cex=0.9)
+(ordihull(dune.mds,dune$MANAGEMENT))
+
+# from the plot we can see the habitats are distinguished by the communties
+```
+```{r}
+management <- factor(dune$MANAGEMENT,levels=c("NM","BF","HF","SF"))
+mm <- model.matrix(~management) # matrix of 1s & 0s
+colnames(mm) <- gsub("management","",colnames(mm)) # remove the word management from each of the column names
+mm <- data.frame(mm)
+
+dune.adonis <- adonis(dune.dist~BF+HF+SF,data=mm,perm=9999) # run permanova
+
+# results show that HF & SF have significantly different communities to NaturalManagement
+```
+
+```{r}
+# could look at simper to see which species distinguish b/w different land management practices
+```
+

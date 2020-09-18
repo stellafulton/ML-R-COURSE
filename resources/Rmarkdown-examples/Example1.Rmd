@@ -1,12 +1,15 @@
 ---
-title: Example markdown
-author: D. Author
-date: 16-06-2020
+title: "Example markdown"
+author: "D. Author"
+date: "16-06-2020"
+output: word_document
+editor_options:
+  chunk_output_type: console
 ---
 
 # This is the title
 
-```{r summary}
+```{r summary, echo=FALSE}
 x <- rnorm(10)
 summary(x)
 ```

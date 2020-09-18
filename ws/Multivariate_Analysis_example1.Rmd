@@ -1,0 +1,402 @@
+---
+title: "Multivariate_Analysis_example1"
+author: "Stella Fulton"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    code_folding: show
+    collapse: no
+    df_print: paged
+    fig_caption: yes
+    fig_height: 4
+    fig_width: 4
+    highlight: textmate
+    theme: spacelab
+    toc: yes
+    toc_float: yes
+    css: ../resources/style.css
+  pdf_document:
+    df_print: default
+    fig_caption: yes
+    fig_height: 4
+    fig_width: 4
+    highlight: tango
+    latex_engine: xelatex
+    number_sections: yes
+    toc_depth: 2
+  word_document:
+    fig_caption: yes
+    fig_height: 4
+    fig_width: 4
+    highlight: tango
+    toc: yes
+    toc_depth: 2
+output_dir: "docs"
+documentclass: article
+fontsize: 12pt
+mainfont: Arial
+mathfont: LiberationMono
+monofont: DejaVu Sans Mono
+classoption: a4paper
+bibliography: ../resources/references.bib    
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE)
+```
+
+# Preparations
+
+Load the necessary libraries
+
+```{r libraries, results='markdown', eval=TRUE}
+library(car)         
+library(vegan)
+library(tidyverse)
+library(mvabund)
+library(corrplot)
+library(GGally)
+```
+
+# LOAD data
+# data
+
+```{r readcsv data, eval=TRUE}
+data <- read_csv('/Users/sfulton/OneDrive - James Cook University/JCU/R/AIMSJCU ML R COURSE/ML R COURSE/data/data.csv',trim_ws=TRUE)
+glimpse(data)
+# by looking at the data we can see Sp 5 will dominate the trend
+# perhaps scale the data => even out contribution of rare & abundant taxa (if you don't want to do this and you want to consider the rarity  & abundance then don't scale)
+```
+# LOAD some more data
+## enviro
+
+```{r readcsv enviro, eval=TRUE}
+enviro <- read_csv('/Users/sfulton/OneDrive - James Cook University/JCU/R/AIMSJCU ML R COURSE/ML R COURSE/data/enviro.csv',trim_ws = TRUE)
+glimpse(enviro) # NB pressure - values are numerically very high 
+
+# declare character variables as factors:
+enviro <- mutate(enviro,Substrate=factor(Substrate))
+```
+
+# ALGORITHM-BASED APPROACH
+
+# EXPLORATORY data analysis
+## correlations
+
+```{r correlation plot}
+data[,-1] %>% # take dataset, keep all rows & remove first column
+  cor %>% # calculate pairwise correlation between every species & every other species
+  corrplot(type='upper',diag=FALSE)
+
+# this creates a plot showing the correlation b/w all the species
+# blue = positive, red = negative, size of circle = strength of correlation
+# so Sp3 & Sp9 are most strongly positively correlated 
+```
+```{r ordered correlation plot}
+data[,-1] %>%
+  cor %>% 
+  corrplot(type='upper',order='FPC',diag=FALSE)
+
+# orders the correlation based on principal component (so it's clearer to see here that Sp9 & Sp3 ARE the most strongly positively correlated to one another)
+```
+Ok, so we've established that there's correlations between some of the species
+BUT, remember our assumptions about the correlations - linearity, normality - to explore these we use ggpairs:
+
+# TEST ASSUMPTIONS of correlations 
+## normality
+
+```{r test correlation assumptions normality, message=FALSE,result=HIDE}
+ggpairs(data[,-1],lower=list(continuous='smooth'),diag=list(continuous='density'),axisLabels='show')
+# pairwise correlation
+# on the diagonal it gives a density plot => what we want to see on the diagonals are normal distributions (bell shaped curves) => we don't have this here (out data were counts of each species - counts usually follow Poisson or NegBinomial distributions, so we're not surprised that the correlations don't follow normal distribution)
+# for algorithmic multivariate analysis cannot fit using Poisson, so have to try our best to fit the data to a Normal distribution via a transformation - you could try a log BUT can't do this when you have zeros in your data - instead the typical transformation is a fourth root transformation (shock horror! this causes problems when back transforming) but with this analyses we're combining variables into new variables and they're unit-less so we're not going to back transform anyway so it doesn't matter that a root transformation causes issues with back transforming - fourth root is the one to do because square root is a bit too soft a transformation 
+```
+## linearity
+apply fourth root transformation:
+
+```{r test correlation assumptions linearity, message=FALSE,result=HIDE}
+ggpairs(data[,-1]^0.25,lower=list(continuous='smooth'),diag=list(continuous='density'),axisLabels='show')
+# because this is abundance (count data) it doesn't behave very well and it's hard to meet the assumptions of correlation
+```
+When dealing with ecological count abundance data - need to do fourth root transformation and wisconsin double standardisation transformation (divide everything by their maximum)
+
+# WISCONSIN DOUBLE STANDARDISATION
+standardise so that each column is relative to its maximum - to even up contribution of rare & abundant taxa (divide every element in each column by the maximum element of that column) AND standardise by the rowSums (hence the 'double' standardisation)
+
+```{r wisconsin double standardisation}
+data.stnd <- wisconsin(data[,-1]^0.25)
+```
+# PRINCIPAL COMPONENT ANALYSIS
+
+```{r principal component analysis}
+data.rda <- rda(data.stnd,scale=TRUE) # can choose b/w combining on correlation (standardised covariance - ranges from -1 to 1) OR covariance (NOT standardised), so scale=TRUE means use corelation, scale=FALSE means use covariance
+# could combine variables by how CORRELATED they are or by their COVARIANCE - since we've standardised in a particular way we don't need to scale, but the analysis we'll be easier to look at for this example if we do scale (so combine based on correlation)
+
+summary(data.rda, display=NULL)
+# started with 10, ended with 10 (results here are only giving us result for 1 thorugh to 8)
+# table tells us how much is explained by each new axis
+# so the first axis is explaining around 42% of the variability in the 10 species, principal component 2 explains an additional 25%, PC3 an additional 14% => collectiveey the first 3 add up to 80% => with just 3 axes we can explain 80% of the variation we had in 10 species => this is quite a substantial reduction
+
+# a few ways to decide how many axes to retain
+# 1st way: how many do I need to explain about 80%? in this example, that would be 3
+# 2nd way: how many have an eigenvalue > 1? in this example, that would be 4 (eigenvalue > 1 means the axis is explaining more than just by chance (which would be eigenvalue=1)) - eigenvalue only relevant for correlation (i.e. when you've standardised)
+# 3rd way: use a scree plot (where is there a kink in the plot )
+
+# the idea is to put together variables that are correlated because they are likely to be responding to the same environmental variables - so if you can explain a lot of the variability in only a few correlate species then you've probably identified a environmental major driver for the community
+```
+
+```{r new axes}
+# ok so we've started with 10 species & reduced down to 3 => what are those 3 new axes?
+scores(data.rda,choices=1:3,display='sites') # these are the new axes
+```
+
+```{r species that contribute most to each principal component}
+scores(data.rda,choices=1:3,display='species')
+# this displays degree of correlation b/w each of the new axes (PC) & the old axes (Sp)
+# species 1 correlated with PC1 by -0.23
+# Sp9 is highly correlated to PC1 => this means Sp9 predominantly contributed to PC1, on the other hand Sp8 contributes a lot to PC2
+```
+
+```{r PCA plot using biplot}
+biplot(data.rda,scaling='species') # UGLY PLOT!!!! (but quick to make)
+# what does this all mean?
+# biplot = plotting 2 things! duh
+# sites are displayed as little dots - you can see clearly which sites are most related to one another on the basis of their communities because they will be close together e.g. sites 6&7, sites 2&3, sites 10&1
+# species are displayed with arrows that are vectors of their correlation Sp8 is almost exclusively along 1 dimension because 
+# site 4 different to others probably because of Species 8
+# interpret arrows - if in mainly one direction they are highly correlated to that axis and not the others
+# scaling = 'species' makes the plot on the basis of the sites & then scales the species to fit on that graph - can do the other way around (so plot species arrows then scale the sites) i.e. biplot(data.rda,scaling='sites')
+
+
+
+```
+
+# PLOTTING PCA in ggplot
+
+```{r extract coordinates for sites & species}
+# cool so the biplot graph is informative but UGLY so let's make a pretty plot using ggplot (takes longer but result is better)
+
+# first need to extract site scores:
+data.sites.scores <- data.rda %>% scores(display='sites') %>% as.data.frame() %>% bind_cols(data) # extract site scores & bind to original data
+
+# next extract species scores
+data.species.scores <- data.rda %>% scores(display='species') %>% as.data.frame() %>% mutate(Species=rownames(.))
+
+# so now we have coordinates for the sites (the dots), & the species (the arrows)
+```
+```{r plot PCA using ggplot by building up}
+# we're going to build up the instructions for making the plot rather than doing it all in one go
+g <- ggplot()
+
+g <- g + geom_segment(data=NULL,aes(y=-Inf,x=0,yend=Inf,xend=0),linetype='dotted') # this puts the vertical crosshair at x=0
+
+g <- g + geom_segment(data=NULL,aes(x=-Inf,y=0,xend=Inf,yend=0),linetype='dotted')+ # this puts the horizontal crosshair at y=0
+  geom_point(data=data.sites.scores,aes(y=PC2,x=PC1))+geom_text(data=data.sites.scores,aes(y=PC2,x=PC1,label=Sites,hjust=-0.2),show.legend=FALSE) # add in the sites and put labels next to them
+
+g <- g + geom_segment(data=data.species.scores,aes(y=0,x=0,yend=PC2,xend=PC1),arrow=arrow(length=unit(0.3,'lines')),color='red')+
+  theme_bw() # add in the arrows, colour them red & change plot theme
+
+
+hjust <- ifelse(data.species.scores$PC1>0,0,1) # if else (is your arrow position on the y axis > 0, if it is, then don't do any horizontal adjustment)
+vjust <- ifelse(data.species.scores$PC2>0,0,1)
+
+g <- g + geom_text(data=data.species.scores,aes(y=PC2,x=PC1,label=Species),hjust=hjust,vjust=vjust,color='red') # species names on end of arrows 
+
+# change axes labels - how about we label them with how much was explained by each axis - first extract eigenvalues
+eig <- eigenvals(data.rda) # going to use 41.6% for PC1 & 24.6 for PC2
+
+g <- g + scale_y_continuous(paste(names(eig[2]),sprintf('(%0.1f%% explained var.)',100*eig[2]/sum(eig))))+
+  scale_x_continuous(paste(names(eig[1]),sprintf('(%0.1f%% explained var.)',100*eig[1]/sum(eig))))
+
+circle.prob <- 0.68
+
+# circle is often used to indicate significant correlations - radius of circle is created by what would be the critical level for chi-squared for correltion
+
+r <- sqrt(qchisq(circlapi,length=50),seq(pi,-pi,length=50))
+circle <- data.frame(PC1=r*cos(theta),PC2=r*sin(theta))
+library(scales)
+(g <- g + geom_path(data=circle,aes(y=PC2,x=PC1),color=muted('white'),size=1/2,alpha=1/3))
+
+```
+Ok so now, what about seeing how PC1 & PC2 respond to environmental variables?
+```{r check variance inflation}
+lm(1:nrow(enviro)~pH+Slope+Pressure+Altitude+Substrate,data=enviro) %>% vif # apply linear model (always use gaussian for PCA) & check for variance inflation - we're looking for values less than 5 (ideally less than 3) - values above 5 indicate predictors that are correlated to the others (that's what variance inflation is - variance inflation is (1/(1-r^2)) )
+
+# in this case Pressure & Altitude & perhaps Substrate are correlated so we need to take one of them out (since pressure & altitude are very obviously related we can take one out)
+
+# ok so let's take pressure out & see how that goes:
+lm(1:nrow(enviro)~pH+Slope+Altitude+Substrate,data=enviro) %>% vif # yep this turns out better -  the predictors of pH, Slope, Altitude, Substrate can go in the same model
+```
+
+# FIT model
+
+```{r fit linear model}
+lm(data.sites.scores$PC1~pH+Slope+Altitude+Substrate,data=enviro) %>% summary()
+# should check residuals, assumptions, scaling etc. etc. all the usual things we've been through but it's not the main focus of today's example so just going to skip over that for now
+
+
+# model summary shows the community has a positive relationship with altitude (significant)
+# without scaling predictors, you can't compare effect (because they're all on a different scale) of predictors 
+
+# scale predictors
+lm(data.sites.scores$PC1~scale(pH)+scale(Slope)+scale(Altitude)+Substrate,data=enviro) %>% summary()
+
+# how about PC2
+lm(data.sites.scores$PC2~scale(pH)+scale(Slope)+scale(Altitude)+Substrate,data=enviro) %>% summary()
+# negative relationship with substrate Shale - the biggest trend for PC2
+# numbers here are basically unitless
+
+
+
+# with this stuff you're just determining what environemntal variables are drving change in community composition (but don't necessarily know what that change is)
+```
+
+We can overlay the environmental drivers over our PCA graph that we made:
+
+```{r dummy code categorical data}
+# turn categorical variables into dummy variable (so it's numbered - because analysis of variance only takes numerical variables)
+Xmat <- model.matrix(~-1+pH+Slope+Altitude+Substrate,enviro) # dummy code Substrate
+head(Xmat)
+```
+
+```{r fit environmental data}
+data.env <- envfit(data.rda,env=Xmat) # will work out how much each environmental variable correlates to each principal component
+
+# now overlay on our PCA graph:
+data.env <- envfit(data.rda,env=Xmat)
+data.env.scores <- data.env %>% 
+  scores(display='vector') %>% 
+  as.data.frame() %>% 
+  mutate(Effect=rownames(.))
+hjust <- ifelse(data.env.scores$PC1>0,0,1)
+vjust <- ifelse(data.env.scores$PC2>0,0,1)
+(g <- g + geom_segment(data=data.env.scores,aes(y=0,x=0,yend=PC2,xend=PC1),arrow=arrow(length=unit(0.3,'lines')),color='blue')+
+  geom_text(data=data.env.scores,aes(y=PC2,x=PC1,label=Effect),hjust=hjust,vjust=vjust,color='blue'))
+```
+# Match axes to environmental variable => constrained PCA
+```{r constrained principal component analysis}
+# to match one of the axes to an environmental variable
+
+# scale predictors
+data.rda <- rda(data.stnd~scale(pH)+scale(Altitude)+scale(Slope)+Substrate,data=enviro,scale=FALSE)
+summary(data.rda,display=NULL) # what does this tell us?
+# constrained axes explain 68% of the variability - of the total 10 axes it can rotate in, we constrained 4 of them to align with our environmental variables, and 32% explained by the unconstrained axes => we want the constrained axes to explain a fair bit - so in this example the constrained axes have explained a fair bit so that's good - that means what we supplied had an effect
+
+# collectively the first 2 constrained axes add up to about 59% (see cumulative proportion)
+```
+
+```{r}
+# so along with this, we can get some other statistics - e.g. anova table
+anova(data.rda,by='axis') # all up - are the constrained axes explaining more than chance? this is what this function is doing - it does this via a permutation test
+
+# permutation test mimics what the chance of the pattern you're seeing occurring randomly: sees F statistic, then shuffles data & see what F statistic is (i.e. we assume the pattern we're seeing is important and not just random, so the permutation calculates what is the chance your pattern arose completely at random)
+# permutation gets around assumption violations (often the case in multivariate analyses when predictors are not independent)
+
+
+# on 23 of 1000 cases got the same pattern from permutation test =0.023 <0.05 - this is significant - so the pattern you're observing must be important (not just random)
+
+anova(data.rda,by='margin') # in this example we see altitude is a significant driver of community change
+```
+
+```{r quick plot of constrained PCA}
+plot(data.rda) 
+```
+# CORRESPONDENCE ANALYSIS (as opposed to Redundancy analysis that we've been doing)
+## unconstrained 
+```{r identify association b/w variables}
+# NOT based on correlation, based on CHI-SQUARED - useful for dealing with horseshoe effect
+
+# HAVE to work with frequencies (NOT abundance) - so need to standardise original dataset
+data.stnd <- data[,-1] %>% decostand(method="total",MARGIN=2)
+data.stnd %>% cor %>% corrplot(diag=FALSE)
+data.stnd %>% cor %>% corrplot(diag=FALSE,order='FPC') # can see a wave here so we're going to do correspondence analysis
+```
+
+```{r}
+data.ca <- cca(data.stnd,scale=FALSE)
+summary(data.ca,display=NULL)
+```
+
+```{r}
+
+Xmat <- model.matrix(~-1+pH+Slope+Altitude+Substrate,enviro)
+data.env <- envfit(data.ca,env=Xmat)    # ISSUE HERE
+plot(data.ca,scaling='species')
+plot(data.env,add=TRUE) # this doesn't work in Rmarkdown but in console it will add to the plot
+```
+
+
+## constrained analysis
+```{r}
+data.cca <- cca(data.stnd~pH+Altitude+Substrate+Slope,data=enviro,scale=FALSE)
+summary(data.cca,display=NULL)
+```
+
+```{r}
+anova(data.cca,by='margin')
+```
+
+# using different distances (as opposed to euclidean distance)
+```{r}
+data.dist <- vegdist(data.stnd,method='bray') # the smaller the distance, the more similar they are
+# now can do principle coordiates analysis using any distance matrix
+data.capscale <- capscale(data.dist~1,data=enviro)
+summary(data.capscale,display=NULL)
+# this time, two axes alone explain 72%
+```
+
+```{r plot}
+plot(data.capscale) # showing how similar sites are
+```
+
+how about we constrain this:
+```{r constrained braycurtis similarity distance PCA}
+data.capscale.constr <- capscale(data.dist~scale(pH)+scale(Altitude)+scale(Slope)+Substrate,data=enviro)
+summary(data.capscale.constr)
+plot(data.capscale.constr)
+anova(data.capscale.constr,by='margin') # this has identified altitude as significant predictor of community
+```
+
+Obviously, you would choose one way to analyse the data (e.g. constrained, unconstrained, capscale etc. etc.) not all of them
+
+
+# MODEL-BASED APPROACH
+
+```{r join datasets}
+# first join data & enviro datasets using joinfunction
+combined.data <- data %>% full_join(enviro %>% rename(Sites=Site)) # joining datasets this way means the order doesn't matter (using cbind the order must match exactly)
+head(combined.data)
+```
+we need to define just the multi-variate part (the response) as a multivariate object
+```{r declare multlivariate data as multivariate object & visualise patterns on a plot,message=FALSE}
+mva <- mvabund(data[,-1]) #mvabund is a function that prepares data for multivariate analysis
+names(combined.data)
+ggpairs(combined.data[,c(2,12:16)],lower=list(continuous="smooth"),diag=list(continuous="density"),axisLabels="show") # get a sense of any relationships between response & predictors - now looks at how species are correlated to predictors (rather than how the species are correlated to each other - that's what we doing at the start of this example)
+```
+
+```{r plot mean vs. variance}
+# when we assume gaussian - assumes no relationship b/w mean & variance
+# mvabund function 'mean.var' plots mean vs. variance for each species
+meanvar.plot(mva) # this isn't working
+mva
+plot(mva)
+library(mvabund)
+```
+
+```{r fitting many generalised linear models using Poisson distribution & check residuals}
+data.mod <- manyglm(mva~scale(pH)+scale(Altitude)+Substrate+scale(Slope),family=poisson(link='log'),data=enviro) # manyglm performs many glms! # NB: didn't need to dummy code catgeorical variable
+plot(data.mod) # residual plot - possibility that there's a bit of a wedge pattern - so perhaps try a negative binomial
+```
+
+```{r fit many glms using negative Binomial distribution & check residuals}
+data.mod <- manyglm(mva~scale(pH)+scale(Altitude)+Substrate+scale(Slope),family='negative.binomial',data=enviro)
+plot(data.mod) # not as much of a wedge in this residual plot so the negative binomial is better than poisson
+```
+
+```{r analyse model}
+data.mod # tells you characteristics of the model but nothing about the parameters
+anova(data.mod) # uses permutation test
+# performing the analysis this way is much more powerful than the way we were doing it before (algorithm-based)
+anova(data.mod,p.uni='adjusted') # visualise all 10 tests - can find which species are particularly responsive to each predictor - thi is simply doing the multivariate analyses
+# NB: the anova function can take some time to run
+```

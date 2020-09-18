@@ -1,7 +1,8 @@
 ---
-title: This is the title
-author: D. Author
-date: 14-02-2013
+title: "This is the title"
+author: "D. Author"
+date: "14-02-2013"
+output: word_document
 geometry: paperwidth=8cm,paperheight=11cm,hmargin=0.5cm,vmargin=0.1cm
 documentclass: article
 ---

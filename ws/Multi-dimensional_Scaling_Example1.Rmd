@@ -1,0 +1,116 @@
+---
+title: "Multivariate_Analysis_Example2-multidimensionalscaling"
+author: "Stella Fulton"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    code_folding: show
+    collapse: no
+    df_print: paged
+    fig_caption: yes
+    fig_height: 4
+    fig_width: 4
+    highlight: textmate
+    theme: spacelab
+    toc: yes
+    toc_float: yes
+    css: ../resources/style.css
+  pdf_document:
+    df_print: default
+    fig_caption: yes
+    fig_height: 4
+    fig_width: 4
+    highlight: tango
+    latex_engine: xelatex
+    number_sections: yes
+    toc_depth: 2
+  word_document:
+    fig_caption: yes
+    fig_height: 4
+    fig_width: 4
+    highlight: tango
+    toc: yes
+    toc_depth: 2
+output_dir: "docs"
+documentclass: article
+fontsize: 12pt
+mainfont: Arial
+mathfont: LiberationMono
+monofont: DejaVu Sans Mono
+classoption: a4paper
+bibliography: ../resources/references.bib    
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE)
+```
+
+# Multidimensional scaling example
+
+# READ in data
+
+```{r readcsv macnally}
+macnally <- read.csv('data/macnally_full.csv',strip.white=TRUE)
+# bird data SE Aus
+```
+# Prepare data (scale & standardise, dissimilarity) for input to metaMDS()
+Fourth-root transformation
+Wisconsin double standardisation
+Bray-Curtis dissimilarity matrix
+```{r}
+macnally.std <- macnally[,-1]^0.25 %>% wisconsin() # fourth root everything except the first column (can't standardise habitat) then standardise 
+
+# now we need a dissimilarity matrix - bray-curtis (considered useful because scaled to go between 0 & 1 (value close to 0 means things are similar and vice versa & only informed by things that are in common e.g. 2 sites if there's 3 species that neither of them have then that doesn't constitute similarity (this is an important feature - only based on what they DO have in common, not what they DON'T have in common)) - some similarity distances (e.g. euclidean) aren't scaled and take into account things that are in common and things that aren't in common
+macnally.dist <- vegdist(macnally.std,"bray")
+```
+
+# Perform the multi-dimensional scaling using metaMDS()
+# Enter into metaMDS() - stress iterations to optimise configuration of sites based on k axes
+```{r metaMDS}
+macnally.mds <- metaMDS(macnally.dist,k=2)
+macnally.mds$stress # final stress 0.12 < 0.2 so that's acceptable (if it doesn't reach <0.2 then perhaps increase k - i.e. optimise for more than just 2 axes)
+```
+
+```{r plot multidimensional scaling stress iterations}
+stressplot(macnally.mds) # pattern is tight, not quite linear - this form of multi-dimensional scaling is non-metric (based on ranks - not linear)
+plot(macnally.mds)
+```
+
+```{r metaMDS from original dataset (getting mets MDS to do the scaling)}
+macnally.mds <- metaMDS(macnally[,-1],k=2) # go back to doing the multi-dimensional scaling without doing the scaling standardising itself
+macnally.mds$stress
+```
+
+```{r}
+macnally.sites.scores <- macnally.mds %>% scores(display='sites') %>% as.data.frame() %>% bind_cols(macnally)
+macnally.species.scores <- macnally.mds %>% scores(display='species') %>% as.data.frame() %>% mutate(Species=rownames(.))
+g <- ggplot()+
+  geom_point(data=macnally.sites.scores,aes(y=NMDS2,x=NMDS1,color=HABITAT))+
+  geom_point(data=macnally.species.scores,aes(y=NMDS2,x=NMDS1,color='grey'))+
+  geom_text(data=macnally.species.scores,aes(y=NMDS2,x=NMDS1,label=Species,hjust=-0.2),show.legend = FALSE,color='grey')+
+  geom_segment(data=NULL,aes(y=-Inf,x=0,yend=Inf,xend=0),linetype='dotted')+
+  geom_segment(data=NULL,aes(x=-Inf,y=0,xend=Inf,yend=0),linetype='dotted')
+
+# now draw convex hull around habitats - only need habitat column & NMDS1 & NMDS2
+macnally.hull <- macnally.sites.scores %>% 
+  dplyr::select(HABITAT,NMDS1,NMDS2) %>%
+  group_by(HABITAT) %>% 
+  do({data.frame(.[chull(.$NMDS1,.$NMDS2),])}) # create data frame using convex hull which is a function that reject middle points so we just have habitat boundaries - chull returns yes/no (is the point in the middle or not) - the square brackets means all the rows that formed the boundary
+
+g <- g + geom_polygon(data=macnally.hull,aes(x=NMDS1,y=NMDS2,fill=HABITAT),alpha=0.2)+theme_classic() # create coloured polygons for each of the habitats
+  
+# now we have an ordination plot that depicts the relationships among sites & the bird communities seem to be aligned with the habitats
+```
+
+```{r run permanova}
+# permanova (multivariate permutation anova) is run in the vegan package via the 'adonis' function
+# trying to see if there's inferential evidence for what we have just seen
+
+adonis(macnally.dist~HABITAT,data=macnally)
+
+# we've found out there is an association between habitat type and bird species
+
+# similarity percentages
+simper(macnally.std,macnally$HABITAT) # this allows you to go through each habitat type and work out which bird species show the strongest response
+# e.g. the most important bird in distinguishing between two habitat types is the bird with the highest value - i.e. you'll find the biggest difference in abundance in bird x between habitat a and habitat b
+```
