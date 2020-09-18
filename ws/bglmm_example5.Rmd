@@ -60,6 +60,8 @@ library(emmeans)   #for estimating marginal means
 library(MASS)      #for glm.nb
 library(MuMIn)     #for AICc
 library(tidyverse) #for data wrangling
+library(brms)
+library(DHARMa)
 ```
 
 # Scenario
@@ -72,9 +74,7 @@ Someone did something for some reason.....
 owls = read_csv('../data/owls.csv', trim_ws=TRUE)
 glimpse(owls)
 owls <- mutate(owls,Nest=factor(Nest),FoodTreatment=factor(FoodTreatment),SexParent=factor(SexParent),NCalls=SiblingNegotiation) # to rename instead of add on extra variable use 'rename' function
-# number of negotations that owl chicks make - calls - so response is count data (Poisson? or negBinomial)
-# factor for Brood size??
-
+# number of negotations that owl chicks make - calls - so response is count data (Poisson or negBinomial)
 
 # TOP LEVEL: Nests - random level effect
 # what things vary within the nest, what things vary between the nest
@@ -114,7 +114,6 @@ ggplot(owls,aes(y=NegPerChick,x=ArrivalTime,color=FoodTreatment))+
 
 # ok so might want to fit a random slope & random slope random intercept model
 
-
 # NCalls~FoodTreatment+scale(ArrivalTime)+offset(log(BroodSize))+(1|Nest)
 # NCalls~FoodTreatment+scale(ArrivalTime)+offset(log(BroodSize))+(FoodTreatment|Nest)??
 ```
@@ -134,7 +133,7 @@ mcmc_plot(owls.brmsP,type='neff_hist')  # number of effectives
 mcmc_plot(owls.brmsP,type='rhat_hist')  # chain convergence
 ```
 
-```{r test for overdispersion}
+```{r test for overdispersion of brmsP}
 preds <- posterior_predict(owls.brmsP,nsamples=250,summary=FALSE)
 owls.resids <- createDHARMa(simulatedResponse = t(preds),
                              observedResponse = owls$NCalls,
@@ -143,6 +142,8 @@ plot(owls.resids) # BAHH this is NOT good - we have overdispersion (not uncommon
 # could be overdispersed because model is too simplistic
 # could be overdispersed because of zero inflation
 ```
+
+
 ```{r test for zeroinflation}
 #  test for zero inflation
 testZeroInflation(owls.resids) # yep there's a problem here with zero inflation => can account for this with Negative Binomial BUT this dataset has A LOT of zeros so we suspect Negative Binomial won't be able to handle this - instead we try a zero Inflation model 
@@ -158,14 +159,14 @@ owls.brmsZIP <- brm(owls.form1,data=owls,iter=5000,warmup=2000,chains=3,refresh=
 ```
 
 # VALIDATE model owls.brmsZIP
-```{r check chain characteristics}
+```{r check chain characteristics brmsZIP}
 mcmc_plot(owls.brmsZIP,type='trace')      #
 mcmc_plot(owls.brmsZIP,type='acf_bar')    # autocorrelation
 mcmc_plot(owls.brmsZIP,type='neff_hist')  # number of effectives
 mcmc_plot(owls.brmsZIP,type='rhat_hist')  # chain convergence
 ```
 
-```{r test for overdispersion}
+```{r test for overdispersion brmsZIP}
 preds <- posterior_predict(owls.brmsZIP,nsamples=250,summary=FALSE)
 owls.resids <- createDHARMa(simulatedResponse = t(preds),
                              observedResponse = owls$NCalls,
@@ -181,14 +182,14 @@ owls.brmsZINB <- brm(owls.form2,data=owls,iter=5000,warmup=2000,chains=3,refresh
 ```
 
 # VALIDATE model owls.brmsZINB
-```{r check chain characteristics}
+```{r check chain characteristics brmsZINB}
 mcmc_plot(owls.brmsZINB,type='trace')      #
 mcmc_plot(owls.brmsZINB,type='acf_bar')    # autocorrelation
 mcmc_plot(owls.brmsZINB,type='neff_hist')  # number of effectives
 mcmc_plot(owls.brmsZINB,type='rhat_hist')  # chain convergence
 ```
 
-```{r test for overdispersion}
+```{r test for overdispersion brmsZINB}
 preds <- posterior_predict(owls.brmsZINB,nsamples=250,summary=FALSE)
 owls.resids <- createDHARMa(simulatedResponse = t(preds),
                              observedResponse = owls$NCalls,
@@ -207,7 +208,7 @@ owls.brmsZINB1 <- brm(owls.form3,data=owls,iter=5000,warmup=2000,chains=3,refres
 ```
 
 # VALIDATE model owls.brmsZINB1
-```{r test for overdispersion}
+```{r test for overdispersion brmsZINB1}
 preds <- posterior_predict(owls.brmsZINB1,nsamples=250,summary=FALSE)
 owls.resids <- createDHARMa(simulatedResponse = t(preds),
                              observedResponse = owls$NCalls,
@@ -217,7 +218,7 @@ plot(owls.resids) # this is STILL bad - so let's try adding in a random slope to
 
 
 # RE-FIT model owls.brmsZINB2
-```{r fit zero inflated negative binomial model random intercept random slope, cache=TRUE}
+```{r fit zero inflated negative binomial model random intercept random slope brmsZINB2, cache=TRUE}
 # let's change the model one more time by adding in an interaction to see if that helps
 owls.form4 <- bf(NCalls~FoodTreatment*scale(ArrivalTime)+offset(log(BroodSize))+(scale(ArrivalTime)|Nest),  
                  zi~scale(ArrivalTime),                                                                    
@@ -226,7 +227,7 @@ owls.brmsZINB2 <- brm(owls.form4,data=owls,iter=5000,warmup=2000,chains=3,refres
 ```
 
 # VALIDATE model owls.brmsZINB2
-```{r test for overdispersion}
+```{r test for overdispersion brmsZINB2}
 preds <- posterior_predict(owls.brmsZINB2,nsamples=250,summary=FALSE)
 owls.resids <- createDHARMa(simulatedResponse = t(preds),
                              observedResponse = owls$NCalls,
@@ -239,12 +240,11 @@ plot(owls.resids) # this will have to do - at some point you have to be ok with 
 # ok so we've chosen owls.brmsZINB2 as the model to proceed with - let's have a look at it a bit further:
 tidyMCMC(owls.brmsZINB2$fit,conf.int=TRUE,conf.method='HPDinterval',rhat=TRUE,ess=TRUE)
 
-
 # EXAMPLE INTERPRETATIONS OF MODEL SUMMARY RESULTS:
 # b_zi_Intercept average NCalls (on log scale) for the deprived group at the average Arrival Time (& obviously averaged over the nests)
 # b_FoodTreatmentSatiated	-0.274280665	: satiated chicks call less (conf interval indicates this difference is significant - so food treatment seems to have an effect)
 
-#b_zi_scaleArrivalTime	0.336646073 - the chance of false zeros increases as arrival time increases - and this seems to be significant - more & more zeros as arrival time increased - & more and more of them you would consider as false zeros 
+# b_zi_scaleArrivalTime	0.336646073 - the chance of false zeros increases as arrival time increases - and this seems to be significant - more & more zeros as arrival time increased - & more and more of them you would consider as false zeros 
 ```
 
 ```{r plot model by making predictions first}
@@ -261,8 +261,6 @@ ggplot(owls.new,aes(x=ArrivalTime,y=prob))+
   geom_ribbon(aes(ymin=lower.HPD,ymax=upper.HPD,fill=FoodTreatment),alpha=0.2)+
   theme_bw()
 # based on our graph, it seems like the satiated group were fairly consistent with NCalls over time, whereas deprived group called substantially more than satiated groups at low Arrival Time
-
-
 
 emmeans(owls.brmsZINB2,~ArrivalTime|FoodTreatment)
 

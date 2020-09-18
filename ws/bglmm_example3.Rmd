@@ -199,7 +199,7 @@ mcmc_plot(starling.brms1,type='rhat_hist',regex_pars='^b.Intercept|SITUATION|MON
 ```
 
 ```{r LOOIC values}
-# not much point comparing these because the random intercept and random slope model didn't even work so can't compare a model that ran well and a model that didn't run weel
+# not much point comparing these because the random intercept and random slope model didn't even work so can't compare a model that ran well and a model that didn't run well
 # so don't do this unless you've got two models that ran well (chains converged etc. etc.)
 (l.1 <- loo(starling.brms))
 #looic	468.4	
