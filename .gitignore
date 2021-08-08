@@ -6,3 +6,7 @@ resources/Rmarkdown-examples/*.pdf
 resources/Rmarkdown-examples/*.png
 resources/Rmarkdown-examples/*.docx
 resources/Rmarkdown-examples/E*.md
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata

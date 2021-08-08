@@ -98,7 +98,7 @@ Most useful in presenting data, less important with analysis
 arrange(data.1, LAT)      # arrange takes the data.frame, then the variable you want to sort by -                                this example sorts data.1 by LAT (latitude)
 
 # now we can do the same thing using the pipe!
-data.1 %>%                # take the datafram 'data.1'
+data.1 %>%                # take the dataframe 'data.1'
   arrange(LAT)            # use pipe to sort by Latitude
 
 # to sort in descending order....
